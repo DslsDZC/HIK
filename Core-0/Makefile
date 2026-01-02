@@ -38,11 +38,11 @@ SCHED_SOURCES = $(SCHED_DIR)/sched.c
 CAPABILITY_SOURCES = $(CAPABILITY_DIR)/capability.c
 SERVICE_SOURCES = $(SERVICE_DIR)/service.c
 PROCESS_SOURCES = $(PROCESS_DIR)/process.c
-STARTUP_SOURCES = $(STARTUP_DIR)/kernel.c
+STARTUP_SOURCES = $(STARTUP_DIR)/kernel.c $(STARTUP_DIR)/multiboot.S
 IRQ_SOURCES = $(IRQ_DIR)/irq.c
 ISOLATION_SOURCES = $(ISOLATION_DIR)/isolation.c
 MMU_TEST_SOURCES = mmu_test.c
-LIB_SOURCES = lib/string.c
+LIB_SOURCES = lib/string.c lib/debug.c
 
 # All sources
 ALL_SOURCES = $(ARCH_SOURCES) $(MM_SOURCES) $(SCHED_SOURCES) \
@@ -57,7 +57,7 @@ OBJECTS = $(patsubst %.S,$(BUILD_DIR)/%.o,$(ARCH_SOURCES)) \
           $(patsubst %.c,$(BUILD_DIR)/%.o,$(CAPABILITY_SOURCES)) \
           $(patsubst %.c,$(BUILD_DIR)/%.o,$(SERVICE_SOURCES)) \
           $(patsubst %.c,$(BUILD_DIR)/%.o,$(PROCESS_SOURCES)) \
-          $(patsubst %.c,$(BUILD_DIR)/%.o,$(STARTUP_SOURCES)) \
+          $(filter %.o,$(patsubst %.S,$(BUILD_DIR)/%.o,$(STARTUP_SOURCES)) $(patsubst %.c,$(BUILD_DIR)/%.o,$(STARTUP_SOURCES))) \
           $(patsubst %.c,$(BUILD_DIR)/%.o,$(IRQ_SOURCES)) \
           $(patsubst %.c,$(BUILD_DIR)/%.o,$(ISOLATION_SOURCES)) \
           $(patsubst %.c,$(BUILD_DIR)/%.o,$(MMU_TEST_SOURCES)) \
@@ -96,7 +96,7 @@ $(BUILD_DIR)/%.o: %.S
 # Link kernel
 $(KERNEL_ELF): $(OBJECTS)
 	@echo "Linking kernel..."
-	@$(LD) $(LDFLAGS) -o $@ $^
+	@$(LD) $(LDFLAGS) -o $@ $(BUILD_DIR)/startup/multiboot.o $(filter-out $(BUILD_DIR)/startup/multiboot.o,$^)
 
 # Create binary
 $(KERNEL_BIN): $(KERNEL_ELF)

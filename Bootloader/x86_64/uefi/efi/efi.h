@@ -2,8 +2,8 @@
 #define HIK_UEFI_H
 
 #include "types.h"
-#include "protocol.h"
 #include "system_table.h"
+#include "protocol.h"
 
 #define HIK_KERNEL_MAGIC             0x48494B00ULL
 #define HIK_KERNEL_VERSION           0x00010000

@@ -14,8 +14,8 @@
 #define PAGE_SIZE 4096
 #define PAGE_SHIFT 12
 
-/* Maximum physical memory (256GB) */
-#define MAX_PHYSICAL_MEMORY (256ULL * 1024 * 1024 * 1024)
+/* Maximum physical memory (256GB) - reduced for testing to 512MB */
+#define MAX_PHYSICAL_MEMORY (512ULL * 1024 * 1024)
 
 /* Maximum number of pages */
 #define MAX_PAGES (MAX_PHYSICAL_MEMORY / PAGE_SIZE)

@@ -36,18 +36,37 @@ void kernel_panic(const char *message) {
     }
 }
 
+/* Global VGA position */
+static int g_vga_pos = 0;
+
 /*
  * Kernel log
  */
 void kernel_log(const char *message) {
-    /* In real implementation, would write to serial port or VGA */
-    /* For now, just use inline assembly to write to VGA */
+    /* Debug: Write 'L' and 'M' using inline assembly */
+    __asm__ volatile(
+        "movw $0x0F4C, %%ax\n"
+        "movw %%ax, 0xB816\n"
+        "movw $0x0F4D, %%ax\n"
+        "movw %%ax, 0xB818\n"
+        ::: "ax", "memory"
+    );
+
+    /* Infinite loop to pause */
+    while (1) {
+        __asm__ volatile("hlt");
+    }
+
+    /* Initialize pos if needed */
+    if (g_vga_pos == 0) {
+        g_vga_pos = 13;
+    }
+
+    /* Write message directly */
+    volatile uint16_t *vga = (volatile uint16_t*)0xB8000;
     const char *p = message;
-    uint16_t *vga = (uint16_t*)0xB8000;
-    static int pos = 0;
-    
-    while (*p && pos < 80 * 25) {
-        vga[pos++] = (uint16_t)(*p++ | 0x0F00);
+    while (*p && g_vga_pos < 80 * 25) {
+        vga[g_vga_pos++] = (uint16_t)(*p++ | 0x0F00);
     }
 }
 
@@ -78,9 +97,43 @@ boot_info_t* kernel_get_boot_info(void) {
  * Initialize kernel
  */
 int kernel_init(boot_info_t *boot_info) {
+    /* Direct VGA write to confirm we're here */
+    uint16_t *vga = (uint16_t*)0xB8000;
+    vga[5] = (uint16_t)'K' | 0x0F00;  /* Write 'K' at position 5 */
+    vga[6] = (uint16_t)'E' | 0x0F00;  /* Write 'E' at position 6 */
+    vga[7] = (uint16_t)'R' | 0x0F00;  /* Write 'R' at position 7 */
+
+    /* Debug: Step 1 */
+    vga[8] = (uint16_t)'1' | 0x0F00;
+
     g_boot_info = boot_info;
-    
+
+    /* Debug: Step 2 */
+    vga[9] = (uint16_t)'2' | 0x0F00;
+
     kernel_log("HIK Core-0 Kernel v1.0\n");
+
+    /* Debug: Step 3 */
+    vga[10] = (uint16_t)'3' | 0x0F00;
+
+    /* Infinite loop to pause */
+    while (1) {
+        __asm__ volatile("hlt");
+    }
+
+    kernel_log("boot_info pointer: ");
+    kernel_log_hex((uint64_t)boot_info);
+    kernel_log("\n");
+
+    if (boot_info == NULL) {
+        kernel_log("WARNING: boot_info is NULL!\n");
+        kernel_log("Using default values...\n");
+    } else {
+        kernel_log("boot_info magic: ");
+        kernel_log_hex(boot_info->magic);
+        kernel_log("\n");
+    }
+
     kernel_log("Initializing...\n\n");
     
     /* Initialize memory manager */

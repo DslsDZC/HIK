@@ -8,9 +8,9 @@ typedef uint16_t UINT16;
 typedef uint32_t UINT32;
 typedef uint64_t UINT64;
 typedef int8_t   INT8;
-typedef int16_t  INT16;
-typedef int32_t  INT32;
-typedef int64_t  INT64;
+typedef int16_t INT16;
+typedef int32_t INT32;
+typedef int64_t INT64;
 typedef uint8_t  BOOLEAN;
 typedef uint8_t  CHAR8;
 typedef uint16_t CHAR16;
@@ -25,6 +25,58 @@ typedef UINT64  EFI_LBA;
 
 typedef void*   EFI_HANDLE;
 typedef void*   EFI_EVENT;
+
+/* Common enum types */
+typedef enum {
+    EfiReservedMemoryType,
+    EfiLoaderCode,
+    EfiLoaderData,
+    EfiBootServicesCode,
+    EfiBootServicesData,
+    EfiRuntimeServicesCode,
+    EfiRuntimeServicesData,
+    EfiConventionalMemory,
+    EfiUnusableMemory,
+    EfiACPIReclaimMemory,
+    EfiACPIMemoryNVS,
+    EfiMemoryMappedIO,
+    EfiMemoryMappedIOPortSpace,
+    EfiPalCode,
+    EfiPersistentMemory,
+    EfiMaxMemoryType
+} EFI_MEMORY_TYPE;
+
+typedef enum {
+    EfiAnyPages,
+    EfiMaxAddress,
+    EfiAllocateAddress,
+    EfiAllocateMaxAddress
+} EFI_ALLOCATE_TYPE;
+
+typedef enum {
+    EfiTimerCancel,
+    EfiTimerPeriodic,
+    EfiTimerRelative
+} EFI_TIMER_DELAY;
+
+typedef enum {
+    EFI_LOCATE_BY_HANDLE,
+    EFI_LOCATE_BY_PROTOCOL,
+    EFI_LOCATE_BY_REGISTER_NOTIFY
+} EFI_LOCATE_SEARCH_TYPE;
+
+typedef enum {
+    EfiResetCold,
+    EfiResetWarm,
+    EfiResetShutdown,
+    EfiResetPlatformSpecific
+} EFI_RESET_TYPE;
+
+typedef enum {
+    EfiOpenProtocolByHandleProtocol,
+    EfiOpenProtocolByDriver,
+    EfiOpenProtocolByChildController
+} EFI_OPEN_PROTOCOL_ATTRIBUTE;
 
 #define EFI_SUCCESS                0x0000000000000000ULL
 #define EFI_LOAD_ERROR             0x0000000000000001ULL

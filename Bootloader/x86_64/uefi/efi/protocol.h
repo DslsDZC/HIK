@@ -27,17 +27,17 @@
 #define EFI_FILE_INFO_GUID \
     {0x09576e92, 0x6d3f, 0x11d2, {0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b}}
 
-extern EFI_GUID gEfiGlobalVariableGuid;
-extern EFI_GUID gEfiFileInfoGuid;
-extern EFI_GUID gEfiSimpleFileSystemProtocolGuid;
-extern EFI_GUID gEfiFileInfoGuid;
-
 typedef struct _EFI_GUID {
     UINT32  Data1;
     UINT16  Data2;
     UINT16  Data3;
     UINT8   Data4[8];
 } EFI_GUID;
+
+extern EFI_GUID gEfiGlobalVariableGuid;
+extern EFI_GUID gEfiFileInfoGuid;
+extern EFI_GUID gEfiSimpleFileSystemProtocolGuid;
+extern EFI_GUID gEfiFileInfoGuid;
 
 typedef struct _EFI_DEVICE_PATH {
     UINT8   Type;

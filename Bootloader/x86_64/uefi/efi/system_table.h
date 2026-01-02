@@ -2,7 +2,23 @@
 #define HIK_UEFI_SYSTEM_TABLE_H
 
 #include "types.h"
-#include "protocol.h"
+
+/* Forward declarations */
+typedef struct _EFI_GUID {
+    UINT32  Data1;
+    UINT16  Data2;
+    UINT16  Data3;
+    UINT8   Data4[8];
+} EFI_GUID;
+
+typedef struct {
+    UINT32                          Type;
+    UINT32                          Pad;
+    EFI_PHYSICAL_ADDRESS            PhysicalStart;
+    EFI_VIRTUAL_ADDRESS             VirtualStart;
+    UINT64                          NumberOfPages;
+    UINT64                          Attribute;
+} EFI_MEMORY_DESCRIPTOR;
 
 typedef struct {
     CHAR16*                         Signature;
@@ -402,13 +418,6 @@ typedef struct {
     CHAR16                          *ResetString2;
 } EFI_RESET_NOTIFICATION;
 
-typedef enum {
-    EfiResetCold,
-    EfiResetWarm,
-    EfiResetShutdown,
-    EfiResetPlatformSpecific
-} EFI_RESET_TYPE;
-
 typedef struct {
     CHAR16                          *String;
     UINT32                          Attributes;
@@ -511,36 +520,26 @@ typedef struct {
 #define EFI_BACKGROUND_BROWN        0x60
 #define EFI_BACKGROUND_LIGHTGRAY    0x70
 
-typedef enum {
-    EFI_LOCATE_BY_HANDLE,
-    EFI_LOCATE_BY_PROTOCOL,
-    EFI_LOCATE_BY_REGISTER_NOTIFY
-} EFI_LOCATE_SEARCH_TYPE;
-
-typedef enum {
-    EfiAnyPages,
-    EfiMaxAddress,
-    EfiAllocateAddress,
-    EfiAllocateMaxAddress
-} EFI_ALLOCATE_TYPE;
-
-typedef enum {
-    EfiTimerCancel,
-    EfiTimerPeriodic,
-    EfiTimerRelative
-} EFI_TIMER_DELAY;
-
-typedef enum {
-    EfiOpenProtocolByHandleProtocol,
-    EfiOpenProtocolByDriver,
-    EfiOpenProtocolByChildController
-} EFI_OPEN_PROTOCOL_ATTRIBUTE;
-
 typedef struct {
     EFI_HANDLE                      AgentHandle;
     EFI_HANDLE                      ControllerHandle;
     UINT32                          Attributes;
     UINT32                          OpenCount;
 } EFI_OPEN_PROTOCOL_INFORMATION_ENTRY;
+
+typedef struct {
+    UINT32                          Attributes;
+    UINT64                          VendorGuid;
+    void*                           VendorTable;
+} EFI_CONFIGURATION_TABLE;
+
+typedef struct {
+    INTN                            MaxMode;
+    INTN                            Mode;
+    INTN                            Attribute;
+    INTN                            CursorColumn;
+    INTN                            CursorRow;
+    BOOLEAN                         CursorVisible;
+} EFI_SIMPLE_TEXT_OUTPUT_MODE;
 
 #endif
