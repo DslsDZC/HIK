@@ -1,9 +1,9 @@
 # HIK (Hierarchical Isolation Kernel) Architecture Reference Documentation
 
-## 1. Design Philosophy and Fundamental Goals
-
 Author: DslsDZC
 Email: dsls.dzc@gmail.com
+
+## 1. Design Philosophy and Fundamental Goals
 
 HIK (Hierarchical Isolation Kernel) aims to construct an operating system kernel capable of adapting from resource-constrained embedded devices to feature-rich general-purpose computing systems through a unified architectural paradigm. Its core goal is to achieve the trinity of ultimate performance, strong security isolation, and dynamic extensibility within a single architectural framework.
 
