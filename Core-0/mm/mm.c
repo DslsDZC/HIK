@@ -6,7 +6,7 @@
  */
 
 #include "../include/mm.h"
-#include <string.h>
+#include "../include/string.h"
 
 /* Global memory manager state */
 static mm_state_t g_mm_state;

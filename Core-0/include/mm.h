@@ -8,7 +8,7 @@
 #ifndef HIK_CORE0_MM_H
 #define HIK_CORE0_MM_H
 
-#include <stdint.h>
+#include "stdint.h"
 
 /* Page size */
 #define PAGE_SIZE 4096

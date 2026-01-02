@@ -14,6 +14,7 @@ MM_DIR = mm
 SCHED_DIR = sched
 CAPABILITY_DIR = capability
 SERVICE_DIR = service
+PROCESS_DIR = process
 STARTUP_DIR = startup
 IRQ_DIR = irq
 ISOLATION_DIR = isolation
@@ -36,15 +37,18 @@ MM_SOURCES = $(MM_DIR)/mm.c
 SCHED_SOURCES = $(SCHED_DIR)/sched.c
 CAPABILITY_SOURCES = $(CAPABILITY_DIR)/capability.c
 SERVICE_SOURCES = $(SERVICE_DIR)/service.c
+PROCESS_SOURCES = $(PROCESS_DIR)/process.c
 STARTUP_SOURCES = $(STARTUP_DIR)/kernel.c
 IRQ_SOURCES = $(IRQ_DIR)/irq.c
 ISOLATION_SOURCES = $(ISOLATION_DIR)/isolation.c
+MMU_TEST_SOURCES = mmu_test.c
 LIB_SOURCES = lib/string.c
 
 # All sources
 ALL_SOURCES = $(ARCH_SOURCES) $(MM_SOURCES) $(SCHED_SOURCES) \
-              $(CAPABILITY_SOURCES) $(SERVICE_SOURCES) $(STARTUP_SOURCES) \
-              $(IRQ_SOURCES) $(ISOLATION_SOURCES) $(LIB_SOURCES)
+              $(CAPABILITY_SOURCES) $(SERVICE_SOURCES) $(PROCESS_SOURCES) \
+              $(STARTUP_SOURCES) $(IRQ_SOURCES) $(ISOLATION_SOURCES) \
+              $(MMU_TEST_SOURCES) $(LIB_SOURCES)
 
 # Object files
 OBJECTS = $(patsubst %.S,$(BUILD_DIR)/%.o,$(ARCH_SOURCES)) \
@@ -52,9 +56,11 @@ OBJECTS = $(patsubst %.S,$(BUILD_DIR)/%.o,$(ARCH_SOURCES)) \
           $(patsubst %.c,$(BUILD_DIR)/%.o,$(SCHED_SOURCES)) \
           $(patsubst %.c,$(BUILD_DIR)/%.o,$(CAPABILITY_SOURCES)) \
           $(patsubst %.c,$(BUILD_DIR)/%.o,$(SERVICE_SOURCES)) \
+          $(patsubst %.c,$(BUILD_DIR)/%.o,$(PROCESS_SOURCES)) \
           $(patsubst %.c,$(BUILD_DIR)/%.o,$(STARTUP_SOURCES)) \
           $(patsubst %.c,$(BUILD_DIR)/%.o,$(IRQ_SOURCES)) \
           $(patsubst %.c,$(BUILD_DIR)/%.o,$(ISOLATION_SOURCES)) \
+          $(patsubst %.c,$(BUILD_DIR)/%.o,$(MMU_TEST_SOURCES)) \
           $(patsubst %.c,$(BUILD_DIR)/%.o,$(LIB_SOURCES))
 
 # Output files
@@ -71,6 +77,7 @@ directories:
 	@mkdir -p $(BUILD_DIR)/sched
 	@mkdir -p $(BUILD_DIR)/capability
 	@mkdir -p $(BUILD_DIR)/service
+	@mkdir -p $(BUILD_DIR)/process
 	@mkdir -p $(BUILD_DIR)/startup
 	@mkdir -p $(BUILD_DIR)/irq
 	@mkdir -p $(BUILD_DIR)/isolation

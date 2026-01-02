@@ -8,7 +8,7 @@
 #include "../include/isolation.h"
 #include "../include/capability.h"
 #include "../include/mm.h"
-#include <string.h>
+#include "../include/string.h"
 
 /* Maximum number of domains */
 #define MAX_DOMAINS 256
@@ -46,6 +46,161 @@ int isolation_init(void) {
 }
 
 /*
+ * Allocate a page table
+ */
+page_table_t* pt_alloc_page_table(void) {
+    uint64_t phys_addr = mm_alloc(PAGE_SIZE, PAGE_SIZE, MEM_TYPE_KERNEL, 0);
+    if (phys_addr == 0) {
+        return NULL;
+    }
+    
+    page_table_t *pt = (page_table_t *)phys_addr;
+    memset(pt, 0, sizeof(page_table_t));
+    
+    return pt;
+}
+
+/*
+ * Free a page table
+ */
+void pt_free_page_table(page_table_t *pt) {
+    if (pt != NULL) {
+        mm_free((uint64_t)pt);
+    }
+}
+
+/*
+ * Clear a page table
+ */
+int pt_clear_page_table(page_table_t *pt) {
+    if (pt == NULL) {
+        return -1;
+    }
+    
+    memset(pt, 0, sizeof(page_table_t));
+    return 0;
+}
+
+/*
+ * Get page table entry
+ */
+uint64_t pt_get_entry(page_table_t *pt, uint64_t index) {
+    if (pt == NULL || index >= 512) {
+        return 0;
+    }
+    
+    return pt->entries[index];
+}
+
+/*
+ * Set page table entry
+ */
+void pt_set_entry(page_table_t *pt, uint64_t index, uint64_t entry) {
+    if (pt != NULL && index < 512) {
+        pt->entries[index] = entry;
+    }
+}
+
+/*
+ * Check if page table entry is present
+ */
+int pt_is_entry_present(page_table_t *pt, uint64_t index) {
+    if (pt == NULL || index >= 512) {
+        return 0;
+    }
+    
+    return (pt->entries[index] & PT_FLAG_PRESENT) != 0;
+}
+
+/*
+ * Get PML4 table for domain
+ */
+page_table_t* pt_walk_get_pml4(uint64_t domain_id) {
+    if (domain_id >= MAX_DOMAINS) {
+        return NULL;
+    }
+    
+    return g_domain_tables[domain_id].pml4;
+}
+
+/*
+ * Get PDPT table for virtual address
+ */
+page_table_t* pt_walk_get_pdpt(page_table_t *pml4, uint64_t vaddr) {
+    if (pml4 == NULL) {
+        return NULL;
+    }
+    
+    uint64_t pml4_idx = PML4_INDEX(vaddr);
+    uint64_t pml4_entry = pml4->entries[pml4_idx];
+    
+    if (!(pml4_entry & PT_FLAG_PRESENT)) {
+        return NULL;
+    }
+    
+    return (page_table_t *)PTE_GET_ADDRESS(pml4_entry);
+}
+
+/*
+ * Get PD table for virtual address
+ */
+page_table_t* pt_walk_get_pd(page_table_t *pdpt, uint64_t vaddr) {
+    if (pdpt == NULL) {
+        return NULL;
+    }
+    
+    uint64_t pdpt_idx = PDPT_INDEX(vaddr);
+    uint64_t pdpt_entry = pdpt->entries[pdpt_idx];
+    
+    if (!(pdpt_entry & PT_FLAG_PRESENT)) {
+        return NULL;
+    }
+    
+    return (page_table_t *)PTE_GET_ADDRESS(pdpt_entry);
+}
+
+/*
+ * Get PT table for virtual address
+ */
+page_table_t* pt_walk_get_pt(page_table_t *pd, uint64_t vaddr) {
+    if (pd == NULL) {
+        return NULL;
+    }
+    
+    uint64_t pd_idx = PD_INDEX(vaddr);
+    uint64_t pd_entry = pd->entries[pd_idx];
+    
+    if (!(pd_entry & PT_FLAG_PRESENT)) {
+        return NULL;
+    }
+    
+    return (page_table_t *)PTE_GET_ADDRESS(pd_entry);
+}
+
+/*
+ * Get page table entry for virtual address
+ */
+uint64_t pt_walk_get_pte(page_table_t *pml4, uint64_t vaddr) {
+    page_table_t *pdpt = pt_walk_get_pdpt(pml4, vaddr);
+    if (pdpt == NULL) {
+        return 0;
+    }
+    
+    page_table_t *pd = pt_walk_get_pd(pdpt, vaddr);
+    if (pd == NULL) {
+        return 0;
+    }
+    
+    page_table_t *pt = pt_walk_get_pt(pd, vaddr);
+    if (pt == NULL) {
+        return 0;
+    }
+    
+    uint64_t pt_idx = PT_INDEX(vaddr);
+    return pt->entries[pt_idx];
+}
+
+/*
  * Create page tables for a domain
  */
 int isolation_create_page_tables(uint64_t domain_id, uint32_t flags) {
@@ -54,14 +209,10 @@ int isolation_create_page_tables(uint64_t domain_id, uint32_t flags) {
     }
     
     /* Allocate PML4 table */
-    uint64_t pml4_phys = mm_alloc(PAGE_SIZE, PAGE_SIZE, MEM_TYPE_KERNEL, domain_id);
-    if (pml4_phys == 0) {
+    page_table_t *pml4 = pt_alloc_page_table();
+    if (pml4 == NULL) {
         return -1;
     }
-    
-    /* Map PML4 to virtual address */
-    page_table_t *pml4 = (page_table_t *)pml4_phys;
-    memset(pml4, 0, sizeof(page_table_t));
     
     /* Initialize domain page table structure */
     g_domain_tables[domain_id].pml4 = pml4;
@@ -86,8 +237,9 @@ int isolation_destroy_page_tables(uint64_t domain_id) {
         return -1;
     }
     
-    /* Free PML4 table */
-    mm_free((uint64_t)domain->pml4);
+    /* TODO: Recursively free all page tables */
+    /* For now, just free PML4 */
+    pt_free_page_table(domain->pml4);
     
     /* Clear domain entry */
     memset(domain, 0, sizeof(domain_page_table_t));
@@ -136,19 +288,55 @@ int isolation_map_memory(uint64_t domain_id, uint64_t virt_addr, uint64_t phys_a
             break;
     }
     
-    /* Map pages (simplified - in real implementation would walk page tables) */
+    /* Map pages */
     uint64_t num_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
     
     for (uint64_t i = 0; i < num_pages; i++) {
         uint64_t current_virt = virt_addr + i * PAGE_SIZE;
         uint64_t current_phys = phys_addr + i * PAGE_SIZE;
         
-        /* In real implementation, would walk PML4 -> PDPT -> PD -> PT */
-        /* and set appropriate entries with pt_flags */
-        /* For now, this is a placeholder */
-        (void)current_virt;
-        (void)current_phys;
-        (void)pt_flags;
+        /* Walk page tables and create missing levels */
+        page_table_t *pml4 = domain->pml4;
+        uint64_t pml4_idx = PML4_INDEX(current_virt);
+        
+        /* Get or create PDPT */
+        page_table_t *pdpt = pt_walk_get_pdpt(pml4, current_virt);
+        if (pdpt == NULL) {
+            pdpt = pt_alloc_page_table();
+            if (pdpt == NULL) {
+                return -1;
+            }
+            uint64_t pdpt_phys = (uint64_t)pdpt;
+            pt_set_entry(pml4, pml4_idx, pdpt_phys | PT_FLAG_PRESENT | PT_FLAG_WRITABLE | PT_FLAG_USER);
+        }
+        
+        /* Get or create PD */
+        uint64_t pdpt_idx = PDPT_INDEX(current_virt);
+        page_table_t *pd = pt_walk_get_pd(pdpt, current_virt);
+        if (pd == NULL) {
+            pd = pt_alloc_page_table();
+            if (pd == NULL) {
+                return -1;
+            }
+            uint64_t pd_phys = (uint64_t)pd;
+            pt_set_entry(pdpt, pdpt_idx, pd_phys | PT_FLAG_PRESENT | PT_FLAG_WRITABLE | PT_FLAG_USER);
+        }
+        
+        /* Get or create PT */
+        uint64_t pd_idx = PD_INDEX(current_virt);
+        page_table_t *pt = pt_walk_get_pt(pd, current_virt);
+        if (pt == NULL) {
+            pt = pt_alloc_page_table();
+            if (pt == NULL) {
+                return -1;
+            }
+            uint64_t pt_phys = (uint64_t)pt;
+            pt_set_entry(pd, pd_idx, pt_phys | PT_FLAG_PRESENT | PT_FLAG_WRITABLE | PT_FLAG_USER);
+        }
+        
+        /* Set page table entry */
+        uint64_t pt_idx = PT_INDEX(current_virt);
+        pt_set_entry(pt, pt_idx, current_phys | pt_flags);
     }
     
     return 0;
@@ -168,15 +356,29 @@ int isolation_unmap_memory(uint64_t domain_id, uint64_t virt_addr, uint64_t size
         return -1;
     }
     
-    /* Unmap pages (simplified) */
+    /* Unmap pages */
     uint64_t num_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
     
     for (uint64_t i = 0; i < num_pages; i++) {
         uint64_t current_virt = virt_addr + i * PAGE_SIZE;
         
-        /* In real implementation, would walk page tables and clear entries */
-        (void)current_virt;
+        /* Walk page tables */
+        page_table_t *pt = pt_walk_get_pt(
+            pt_walk_get_pd(
+                pt_walk_get_pdpt(domain->pml4, current_virt),
+                current_virt
+            ),
+            current_virt
+        );
+        
+        if (pt != NULL) {
+            uint64_t pt_idx = PT_INDEX(current_virt);
+            pt_set_entry(pt, pt_idx, 0);
+        }
     }
+    
+    /* Invalidate TLB */
+    tlb_invalidate_page(virt_addr);
     
     return 0;
 }
@@ -195,11 +397,26 @@ int isolation_verify_access(uint64_t domain_id, uint64_t addr, uint64_t size, ui
         return -1;
     }
     
-    /* In real implementation, would walk page tables and verify permissions */
-    /* For now, return success */
-    (void)addr;
-    (void)size;
-    (void)access;
+    /* Check each page */
+    uint64_t num_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+    
+    for (uint64_t i = 0; i < num_pages; i++) {
+        uint64_t current_addr = addr + i * PAGE_SIZE;
+        
+        uint64_t pte = pt_walk_get_pte(domain->pml4, current_addr);
+        
+        if (!(pte & PT_FLAG_PRESENT)) {
+            return -1;  /* Page not present */
+        }
+        
+        if ((access & 0x01) && !(pte & PT_FLAG_USER)) {
+            return -1;  /* Need user access but not allowed */
+        }
+        
+        if ((access & 0x02) && !(pte & PT_FLAG_WRITABLE)) {
+            return -1;  /* Need write access but not allowed */
+        }
+    }
     
     return 0;
 }
@@ -283,4 +500,71 @@ domain_page_table_t* isolation_get_page_tables(uint64_t domain_id) {
  */
 call_gate_table_t* isolation_get_call_gates(void) {
     return &g_call_gate_table;
+}
+
+/*
+ * Invalidate TLB for a single page
+ */
+void tlb_invalidate_page(uint64_t addr) {
+    __asm__ volatile("invlpg (%0)" : : "r"(addr) : "memory");
+}
+
+/*
+ * Invalidate entire TLB
+ */
+void tlb_invalidate_all(void) {
+    uint64_t cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    __asm__ volatile("mov %0, %%cr3" : : "r"(cr3) : "memory");
+}
+
+/*
+ * Invalidate TLB for an ASID (not supported on x86_64)
+ */
+void tlb_invalidate_asid(uint64_t asid) {
+    (void)asid;
+    tlb_invalidate_all();
+}
+
+/*
+ * Setup identity mapping
+ */
+int pt_setup_identity_map(uint64_t domain_id, uint64_t start, uint64_t size, uint64_t flags) {
+    return isolation_map_memory(domain_id, start, start, size, MAP_TYPE_DATA, 0);
+}
+
+/*
+ * Setup kernel mapping
+ */
+int pt_setup_kernel_map(uint64_t domain_id, uint64_t kernel_start, uint64_t kernel_size) {
+    uint64_t kernel_virt = KERNEL_CODE_BASE;
+    return isolation_map_memory(domain_id, kernel_virt, kernel_start, kernel_size, MAP_TYPE_CODE, 0);
+}
+
+/*
+ * Setup user mapping
+ */
+int pt_setup_user_map(uint64_t domain_id, uint64_t user_start, uint64_t user_size) {
+    return isolation_map_memory(domain_id, USER_BASE, user_start, user_size, MAP_TYPE_DATA, 0);
+}
+
+/*
+ * Check if address is in kernel space
+ */
+int is_kernel_address(uint64_t addr) {
+    return addr >= KERNEL_BASE;
+}
+
+/*
+ * Check if address is in user space
+ */
+int is_user_address(uint64_t addr) {
+    return addr >= USER_BASE && addr < USER_LIMIT;
+}
+
+/*
+ * Check if address is in device space
+ */
+int is_device_address(uint64_t addr) {
+    return addr >= DEVICE_BASE;
 }

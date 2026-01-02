@@ -7,7 +7,7 @@
 #ifndef HIK_CORE0_KERNEL_H
 #define HIK_CORE0_KERNEL_H
 
-#include <stdint.h>
+#include "stdint.h"
 
 /* Boot information structure (from bootloader) */
 typedef struct {

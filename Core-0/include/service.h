@@ -8,7 +8,7 @@
 #ifndef HIK_CORE0_SERVICE_H
 #define HIK_CORE0_SERVICE_H
 
-#include <stdint.h>
+#include "stdint.h"
 #include "../include/capability.h"
 
 /* Maximum number of services */

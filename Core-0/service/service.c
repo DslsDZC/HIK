@@ -6,7 +6,7 @@
 #include "../include/mm.h"
 #include "../include/capability.h"
 #include "../include/sched.h"
-#include <string.h>
+#include "../include/string.h"
 
 /* Global service manager state */
 static service_manager_t g_service_manager;

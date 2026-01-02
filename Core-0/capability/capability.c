@@ -3,7 +3,7 @@
  */
 
 #include "../include/capability.h"
-#include <string.h>
+#include "../include/string.h"
 
 /* Global capability system state */
 static cap_system_t g_cap_system;

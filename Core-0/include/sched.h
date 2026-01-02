@@ -8,7 +8,7 @@
 #ifndef HIK_CORE0_SCHED_H
 #define HIK_CORE0_SCHED_H
 
-#include <stdint.h>
+#include "stdint.h"
 
 /* Thread states */
 typedef enum {

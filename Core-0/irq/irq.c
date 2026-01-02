@@ -8,7 +8,7 @@
 
 #include "../include/irq.h"
 #include "../include/capability.h"
-#include <string.h>
+#include "../include/string.h"
 
 /* Global interrupt routing table */
 static irq_route_table_t g_irq_table;

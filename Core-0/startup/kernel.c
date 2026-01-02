@@ -9,10 +9,14 @@
 #include "../include/capability.h"
 #include "../include/sched.h"
 #include "../include/service.h"
+#include "../include/process.h"
 #include "../include/longmode.h"
 #include "../include/irq.h"
 #include "../include/isolation.h"
-#include <string.h>
+#include "../include/string.h"
+
+/* External test function */
+extern int mmu_run_tests(void);
 
 /* Boot information */
 static boot_info_t *g_boot_info = NULL;
@@ -117,12 +121,43 @@ int kernel_init(boot_info_t *boot_info) {
     }
     kernel_log("Isolation system initialized\n\n");
     
+    /* Setup MMU for kernel domain */
+    kernel_log("Setting up MMU for kernel domain...\n");
+    if (isolation_create_page_tables(0, DOMAIN_FLAG_KERNEL) != 0) {
+        kernel_panic("Failed to create kernel page tables");
+    }
+    
+    /* Setup identity mapping for low memory */
+    kernel_log("Setting up identity mapping...\n");
+    if (pt_setup_identity_map(0, 0, 0x100000, PT_FLAG_PRESENT | PT_FLAG_WRITABLE) != 0) {
+        kernel_panic("Failed to setup identity mapping");
+    }
+    
+    /* Setup kernel mapping */
+    kernel_log("Setting up kernel mapping...\n");
+    if (pt_setup_kernel_map(0, 0x100000, 0x100000) != 0) {
+        kernel_panic("Failed to setup kernel mapping");
+    }
+    
+    kernel_log("MMU setup complete\n\n");
+    
+    /* Run MMU tests */
+    kernel_log("Running MMU tests...\n");
+    mmu_run_tests();
+    
     /* Initialize service manager */
     kernel_log("Initializing service manager...\n");
     if (service_init() != 0) {
         kernel_panic("Failed to initialize service manager");
     }
     kernel_log("Service manager initialized\n\n");
+    
+    /* Initialize process manager */
+    kernel_log("Initializing process manager...\n");
+    if (process_init() != 0) {
+        kernel_panic("Failed to initialize process manager");
+    }
+    kernel_log("Process manager initialized\n\n");
     
     /* Initialize long mode */
     kernel_log("Initializing long mode...\n");
@@ -185,6 +220,10 @@ void kernel_main(void) {
     
     /* Start Core-1 services */
     start_core1_services();
+    
+    kernel_log("Starting Core-3 applications...\n");
+    /* In a full implementation, would start user applications here */
+    kernel_log("Core-3 applications ready\n\n");
     
     kernel_log("System ready\n");
     kernel_log("Press Ctrl+C to stop (not implemented)\n\n");

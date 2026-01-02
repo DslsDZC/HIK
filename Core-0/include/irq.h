@@ -9,7 +9,7 @@
 #ifndef HIK_CORE0_IRQ_H
 #define HIK_CORE0_IRQ_H
 
-#include <stdint.h>
+#include "stdint.h"
 
 /* Maximum number of interrupt vectors */
 #define MAX_IRQ_VECTORS 256

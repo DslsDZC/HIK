@@ -7,7 +7,6 @@
 #include "../fs/fs.h"
 #include "../util/util.h"
 #include <stddef.h>
-#include <string.h>
 
 /* Boot configuration */
 static boot_config_t boot_config;

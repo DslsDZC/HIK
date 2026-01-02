@@ -7,7 +7,7 @@
 #ifndef HIK_CORE0_LONGMODE_H
 #define HIK_CORE0_LONGMODE_H
 
-#include <stdint.h>
+#include "stdint.h"
 
 /* Page table entries */
 typedef struct {

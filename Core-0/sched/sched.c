@@ -4,7 +4,7 @@
 
 #include "../include/sched.h"
 #include "../include/mm.h"
-#include <string.h>
+#include "../include/string.h"
 
 /* Global scheduler state */
 static sched_state_t g_sched_state;

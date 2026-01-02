@@ -9,7 +9,7 @@
 #ifndef HIK_CORE0_CAPABILITY_H
 #define HIK_CORE0_CAPABILITY_H
 
-#include <stdint.h>
+#include "stdint.h"
 
 /* Capability types */
 typedef enum {
