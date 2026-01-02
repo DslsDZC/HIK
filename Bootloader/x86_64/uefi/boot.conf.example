@@ -1,0 +1,32 @@
+# HIK Bootloader Configuration File
+# This file should be placed at \EFI\HIK\boot.conf on the EFI system partition
+
+# Boot menu title
+title = "HIK Boot Manager"
+
+# Default boot timeout in seconds (0 for no timeout)
+timeout = 5
+
+# Boot entry 1
+[entry]
+name = "HIK Kernel (Default)"
+kernel = "\\EFI\\HIK\\kernel.hik"
+initrd = "\\EFI\\HIK\\initrd.img"
+args = "console=ttyS0,115200 debug=1"
+default = true
+
+# Boot entry 2 (example recovery mode)
+[entry]
+name = "HIK Kernel (Recovery Mode)"
+kernel = "\\EFI\\HIK\\kernel.hik"
+initrd = "\\EFI\\HIK\\initrd.img"
+args = "console=ttyS0,115200 single"
+default = false
+
+# Boot entry 3 (example with different kernel version)
+[entry]
+name = "HIK Kernel (Previous Version)"
+kernel = "\\EFI\\HIK\\kernel-v0.9.hik"
+initrd = "\\EFI\\HIK\\initrd.img"
+args = "console=ttyS0,115200"
+default = false
