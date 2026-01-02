@@ -11,7 +11,7 @@ static int vga_cursor_y = 0;
 static uint8_t vga_color = 0x0F;  /* White on black */
 
 /* Memory map */
-static memory_map_entry_t memory_map[MAX_MEMORY_MAP_ENTRIES];
+static memory_map_entry_t memory_map[MAX_MEMORY_MAP_ENTRIES] __attribute__((unused));
 static uint32_t memory_map_count = 0;
 
 /*
@@ -144,10 +144,10 @@ int hal_detect_memory(hik_boot_info_t *boot_info) {
             "movl $24, %%edx\n"
             "int $0x15\n"
             : "=a"(signature), "=b"(ebx), "=c"(size)
-            : "a"(0xE820), "b"(continuation), "c"(24), "d"('SMAP')
+            : "a"(0xE820), "b"(continuation), "c"(24), "d"(0x534D4150)  /* 'SMAP' */
         );
-        
-        if (signature != 'SMAP' || size < 20) {
+
+        if (signature != 0x534D4150 || size < 20) {
             break;
         }
         
@@ -171,7 +171,8 @@ int hal_detect_memory(hik_boot_info_t *boot_info) {
     }
     
     /* Add extended memory if detected */
-    uint16_t ext_mem = *((uint16_t*)0x413);  /* BIOS data area */
+    const volatile uint16_t *mem_ptr = (const volatile uint16_t*)0x413;
+uint16_t ext_mem = *mem_ptr;  /* BIOS data area */
     if (ext_mem > 640) {
         map[entries].base_address = 0x100000;
         map[entries].length = (ext_mem - 640) * 1024;
@@ -233,12 +234,16 @@ uint32_t hal_get_memory_map_count(void) {
     return memory_map_count;
 }
 
+/* Forward declaration for static function */
+static uint64_t search_rsdp(uint64_t start, uint64_t end);
+
 /*
  * Find ACPI RSDP
  */
 uint64_t hal_find_rsdp(void) {
     /* Search for RSDP in EBDA (Extended BIOS Data Area) */
-    uint16_t ebda_base = *((uint16_t*)0x40E) << 4;
+    const volatile uint16_t *ebda_ptr = (const volatile uint16_t*)0x40E;
+    uint16_t ebda_base = *ebda_ptr << 4;
     
     if (ebda_base != 0) {
         uint64_t rsdp = search_rsdp(ebda_base, 0xA0000);
@@ -256,19 +261,20 @@ uint64_t hal_find_rsdp(void) {
  */
 static uint64_t search_rsdp(uint64_t start, uint64_t end) {
     for (uint64_t addr = start; addr < end; addr += 16) {
-        if (memcmp((void*)addr, "RSD PTR ", 8) == 0) {
+        const uint8_t *ptr = (const uint8_t*)(uintptr_t)addr;
+        if (memcmp(ptr, "RSD PTR ", 8) == 0) {
             /* Verify checksum */
             uint8_t sum = 0;
             for (int i = 0; i < 20; i++) {
-                sum += *((uint8_t*)(addr + i));
+                sum += ptr[i];
             }
-            
+
             if (sum == 0) {
                 return addr;
             }
         }
     }
-    
+
     return 0;
 }
 
@@ -366,19 +372,11 @@ void vga_set_color(uint8_t fg, uint8_t bg) {
 }
 
 /*
- * Compare memory
+ * Halt system
  */
-static int memcmp(const void *ptr1, const void *ptr2, uint64_t size) {
-    const uint8_t *p1 = (const uint8_t*)ptr1;
-    const uint8_t *p2 = (const uint8_t*)ptr2;
-    
-    while (size--) {
-        if (*p1 != *p2) {
-            return *p1 - *p2;
-        }
-        p1++;
-        p2++;
+void halt(void) {
+    asm volatile("cli");
+    while (1) {
+        asm volatile("hlt");
     }
-    
-    return 0;
 }

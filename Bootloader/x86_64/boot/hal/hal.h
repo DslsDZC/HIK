@@ -51,6 +51,9 @@ void hal_wait_key(void);
 /* Reboot system */
 void hal_reboot(void);
 
+/* Halt system */
+void halt(void);
+
 /* Detect memory */
 int hal_detect_memory(hik_boot_info_t *boot_info);
 

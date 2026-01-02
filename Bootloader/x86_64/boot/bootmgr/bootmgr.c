@@ -6,6 +6,8 @@
 #include "../hal/hal.h"
 #include "../fs/fs.h"
 #include "../util/util.h"
+#include <stddef.h>
+#include <string.h>
 
 /* Boot configuration */
 static boot_config_t boot_config;
@@ -42,12 +44,12 @@ int bootmgr_load_config(const char *path) {
     
     if (!fs_read(buffer, sizeof(buffer) - 1, &bytes_read)) {
         hal_print("WARNING: Cannot read boot config file\n");
-        fs_close();
+        fs_close(0);
         return 0;
     }
     
     buffer[bytes_read] = '\0';
-    fs_close();
+    fs_close(0);
     
     /* Parse configuration (simplified) */
     char *line = buffer;

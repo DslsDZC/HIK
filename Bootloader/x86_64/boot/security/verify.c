@@ -57,10 +57,12 @@ int verify_kernel(kernel_header_t *header) {
     }
     
     hal_print("Verifying kernel signature...\n");
-    
+
     /* Calculate hash of kernel image */
     image_data = (uint8_t*)KERNEL_LOAD_ADDR;
-    image_size = header->image_size;
+    /* Calculate total kernel size */
+    image_size = header->code_size + header->data_size +
+                  header->config_size + header->signature_size;
     
     sha384_context_t ctx;
     sha384_init(&ctx);

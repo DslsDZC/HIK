@@ -5,6 +5,14 @@
 #include "fs.h"
 #include "../hal/hal.h"
 #include "../util/util.h"
+#include <stddef.h>
+
+/* Forward declarations for static functions */
+static int read_disk_sector(uint32_t lba, uint8_t *buffer);
+static int read_disk_sectors(uint32_t lba, uint32_t count, uint8_t *buffer);
+static uint32_t get_fat_entry(uint32_t cluster);
+static char toupper(char c);
+static int find_file(const char *path, file_handle_t *file);
 
 /* FAT32 Boot Sector (BPB) */
 typedef struct {
@@ -152,7 +160,8 @@ int fs_open(const char *path) {
 /*
  * Close file
  */
-void fs_close(void) {
+void fs_close(int fd) {
+    (void)fd;  /* Suppress unused parameter warning */
     file_open = 0;
     current_file.in_use = 0;
 }

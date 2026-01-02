@@ -10,7 +10,7 @@ EIFTOOL = efi-to-elf
 # Directories
 ROOT_DIR = ../../..
 BUILD_DIR = build
-SRC_DIR = .
+SRC_DIR = ..
 EFI_DIR = $(SRC_DIR)/efi
 HAL_DIR = $(SRC_DIR)/hal
 FS_DIR = $(SRC_DIR)/fs

@@ -7,6 +7,11 @@
 
 #include <stdint.h>
 
+/* Define size_t if not available */
+#ifndef size_t
+typedef uint32_t size_t;
+#endif
+
 /* Port I/O */
 static inline uint8_t inb(uint16_t port) {
     uint8_t value;
@@ -39,11 +44,12 @@ static inline void outl(uint16_t port, uint32_t value) {
 }
 
 /* Memory operations */
-void memcpy(void *dst, const void *src, uint64_t size);
-void memset(void *ptr, uint8_t value, uint64_t size);
-int memcmp(const void *ptr1, const void *ptr2, uint64_t size);
-void strcpy(char *dst, const char *src);
+void *memcpy(void *dst, const void *src, uint32_t size);
+void *memset(void *ptr, int value, uint32_t size);
+int memcmp(const void *ptr1, const void *ptr2, uint32_t size);
+char *strcpy(char *dst, const char *src);
 int strcmp(const char *str1, const char *str2);
+char *strchr(const char *str, int c);
 size_t strlen(const char *str);
 
 /* String to number */

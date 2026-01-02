@@ -5,6 +5,9 @@
 #include "sha384.h"
 #include "../util/util.h"
 
+/* Forward declaration for static function */
+static void sha384_transform(uint64_t state[6], const uint8_t block[128]);
+
 /* SHA-384 constants */
 static const uint64_t K[80] = {
     0x428A2F98D728AE22, 0x7137449123EF65CD, 0xB5C0FBCFEC4D3B2F, 0xE9B5DBA58189DBBC,

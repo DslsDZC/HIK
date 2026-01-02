@@ -3,37 +3,42 @@
  */
 
 #include "util.h"
+#include <stddef.h>
 
 /*
  * Copy memory
  */
-void memcpy(void *dst, const void *src, uint64_t size) {
+void *memcpy(void *dst, const void *src, uint32_t size) {
     uint8_t *d = (uint8_t*)dst;
     const uint8_t *s = (const uint8_t*)src;
-    
+
     while (size--) {
         *d++ = *s++;
     }
+
+    return dst;
 }
 
 /*
- * Fill memory
+ * Set memory
  */
-void memset(void *ptr, uint8_t value, uint64_t size) {
+void *memset(void *ptr, int value, uint32_t size) {
     uint8_t *p = (uint8_t*)ptr;
-    
+
     while (size--) {
-        *p++ = value;
+        *p++ = (uint8_t)value;
     }
+
+    return ptr;
 }
 
 /*
  * Compare memory
  */
-int memcmp(const void *ptr1, const void *ptr2, uint64_t size) {
+int memcmp(const void *ptr1, const void *ptr2, uint32_t size) {
     const uint8_t *p1 = (const uint8_t*)ptr1;
     const uint8_t *p2 = (const uint8_t*)ptr2;
-    
+
     while (size--) {
         if (*p1 != *p2) {
             return *p1 - *p2;
@@ -41,18 +46,20 @@ int memcmp(const void *ptr1, const void *ptr2, uint64_t size) {
         p1++;
         p2++;
     }
-    
+
     return 0;
 }
 
 /*
  * Copy string
  */
-void strcpy(char *dst, const char *src) {
+char *strcpy(char *dst, const char *src) {
+    char *orig_dst = dst;
     while (*src) {
         *dst++ = *src++;
     }
     *dst = '\0';
+    return orig_dst;
 }
 
 /*
@@ -64,6 +71,19 @@ int strcmp(const char *str1, const char *str2) {
         str2++;
     }
     return *str1 - *str2;
+}
+
+/*
+ * Find character in string
+ */
+char *strchr(const char *str, int c) {
+    while (*str) {
+        if (*str == (char)c) {
+            return (char*)str;
+        }
+        str++;
+    }
+    return NULL;
 }
 
 /*

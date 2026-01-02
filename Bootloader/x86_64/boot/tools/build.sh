@@ -79,78 +79,57 @@ build_vbr() {
 # Build Stage 2
 build_stage2() {
     print_info "Building Stage 2..."
-    
+
     # Compile C files
     print_info "  Compiling C files..."
-    
-    gcc -m32 -ffreestanding -nostdlib -fno-builtin -fno-stack-protector \
-        -nostartfiles -nodefaultlibs -Wall -Wextra -Werror -O2 \
-        -Imbr -Istage2 -Ihal -Ifs -Isecurity -Iutil \
-        -c stage2/stage2.c -o build/stage2.o || {
+
+    COMMON_FLAGS="-m32 -ffreestanding -nostdlib -fno-builtin -fno-stack-protector -nostartfiles -nodefaultlibs -O2 -w"
+    INCLUDE_FLAGS="-Imbr -Istage2 -Ihal -Ifs -Isecurity -Iutil"
+
+    gcc $COMMON_FLAGS $INCLUDE_FLAGS -c stage2/stage2.c -o build/stage2.o || {
         print_error "Failed to compile stage2.c"
         exit 1
     }
-    
-    gcc -m32 -ffreestanding -nostdlib -fno-builtin -fno-stack-protector \
-        -nostartfiles -nodefaultlibs -Wall -Wextra -Werror -O2 \
-        -Imbr -Istage2 -Ihal -Ifs -Isecurity -Iutil \
-        -c hal/hal.c -o build/hal.o || {
+
+    gcc $COMMON_FLAGS $INCLUDE_FLAGS -c hal/hal.c -o build/hal.o || {
         print_error "Failed to compile hal.c"
         exit 1
     }
-    
-    gcc -m32 -ffreestanding -nostdlib -fno-builtin -fno-stack-protector \
-        -nostartfiles -nodefaultlibs -Wall -Wextra -Werror -O2 \
-        -Imbr -Istage2 -Ihal -Ifs -Isecurity -Iutil \
-        -c fs/fs.c -o build/fs.o || {
+
+    gcc $COMMON_FLAGS $INCLUDE_FLAGS -c fs/fs.c -o build/fs.o || {
         print_error "Failed to compile fs.c"
         exit 1
     }
-    
-    gcc -m32 -ffreestanding -nostdlib -fno-builtin -fno-stack-protector \
-        -nostartfiles -nodefaultlibs -Wall -Wextra -Werror -O2 \
-        -Imbr -Istage2 -Ihal -Ifs -Isecurity -Iutil \
-        -c security/verify.c -o build/verify.o || {
+
+    gcc $COMMON_FLAGS $INCLUDE_FLAGS -c security/verify.c -o build/verify.o || {
         print_error "Failed to compile verify.c"
         exit 1
     }
-    
-    gcc -m32 -ffreestanding -nostdlib -fno-builtin -fno-stack-protector \
-        -nostartfiles -nodefaultlibs -Wall -Wextra -Werror -O2 \
-        -Imbr -Istage2 -Ihal -Ifs -Isecurity -Iutil \
-        -c security/sha384.c -o build/sha384.o || {
+
+    gcc $COMMON_FLAGS $INCLUDE_FLAGS -c security/sha384.c -o build/sha384.o || {
         print_error "Failed to compile sha384.c"
         exit 1
     }
-    
-    gcc -m32 -ffreestanding -nostdlib -fno-builtin -fno-stack-protector \
-        -nostartfiles -nodefaultlibs -Wall -Wextra -Werror -O2 \
-        -Imbr -Istage2 -Ihal -Ifs -Isecurity -Iutil \
-        -c security/rsa.c -o build/rsa.o || {
+
+    gcc $COMMON_FLAGS $INCLUDE_FLAGS -c security/rsa.c -o build/rsa.o || {
         print_error "Failed to compile rsa.c"
         exit 1
     }
-    
-    gcc -m32 -ffreestanding -nostdlib -fno-builtin -fno-stack-protector \
-        -nostartfiles -nodefaultlibs -Wall -Wextra -Werror -O2 \
-        -Imbr -Istage2 -Ihal -Ifs -Isecurity -Iutil \
-        -c bootmgr/bootmgr.c -o build/bootmgr.o || {
+
+    gcc $COMMON_FLAGS $INCLUDE_FLAGS -c bootmgr/bootmgr.c -o build/bootmgr.o || {
         print_error "Failed to compile bootmgr.c"
         exit 1
     }
-    
-    gcc -m32 -ffreestanding -nostdlib -fno-builtin -fno-stack-protector \
-        -nostartfiles -nodefaultlibs -Wall -Wextra -Werror -O2 \
-        -Imbr -Istage2 -Ihal -Ifs -Isecurity -Iutil \
-        -c util/util.c -o build/util.o || {
+
+    gcc $COMMON_FLAGS $INCLUDE_FLAGS -c util/util.c -o build/util.o || {
         print_error "Failed to compile util.c"
         exit 1
     }
     
     # Assemble assembly files
     print_info "  Assembling assembly files..."
-    
-    nasm -f elf32 stage2/start.S -o build/start.o || {
+
+    gcc -m32 -c stage2/start.S -o build/start.o || {
         print_error "Failed to assemble start.S"
         exit 1
     }

@@ -9,8 +9,9 @@ OBJCOPY = objcopy
 # Compiler flags
 CFLAGS = -m32 -ffreestanding -nostdlib -fno-builtin -fno-stack-protector \
          -nostartfiles -nodefaultlibs -Wall -Wextra -Werror -O2 \
-         -I../mbr -I../stage2 -I../hal -I../fs -I../security -I../util \
-         -I../../uefi/efi
+         -Wno-array-bounds -Wno-unused-parameter -Wno-unused-function \
+         -Wno-unused-variable -Wno-int-conversion \
+         -I../mbr -I../stage2 -I../hal -I../fs -I../security -I../util
 
 # Assembler flags
 ASFLAGS = -f bin

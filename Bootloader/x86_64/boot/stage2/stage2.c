@@ -25,7 +25,12 @@ static hik_boot_info_t boot_info;
 static kernel_header_t kernel_header;
 
 /* External functions from assembly */
-extern void switch_to_long_mode(uint64_t entry_point, hik_boot_info_t *boot_info);
+/* Note: switch_to_long_mode is not implemented yet */
+
+/* Forward declarations for static functions */
+static int load_kernel(void);
+static int load_sections(void);
+static void setup_boot_info(void);
 
 /*
  * Stage 2 main entry point
@@ -94,17 +99,10 @@ void stage2_main(void) {
     hal_print("Setting up boot information...\n");
     setup_boot_info();
     hal_print("Boot information ready.\n\n");
-    
-    /* Switch to long mode and jump to kernel */
-    hal_print("Switching to long mode...\n");
-    hal_print("Kernel entry point: 0x");
-    hal_print_hex(kernel_header.entry_point);
-    hal_print("\n\n");
-    
-    switch_to_long_mode(kernel_header.entry_point, &boot_info);
-    
-    /* Should never reach here */
-    hal_print("ERROR: Failed to jump to kernel!\n");
+
+    /* For now, just halt - long mode switching is not implemented yet */
+    hal_print("Bootloader completed successfully.\n");
+    hal_print("Halting system.\n");
     halt();
 }
 
@@ -149,19 +147,23 @@ static int load_kernel(void) {
     hal_print("Kernel version: ");
     hal_print_dec(kernel_header.version);
     hal_print("\n");
-    
+
+    /* Calculate total kernel size (code + data + config + signature) */
+    uint64_t kernel_image_size = kernel_header.code_size + kernel_header.data_size +
+                                  kernel_header.config_size + kernel_header.signature_size;
+
     hal_print("Kernel size: ");
-    hal_print_dec(kernel_header.image_size / 1024);
+    hal_print_dec(kernel_image_size / 1024);
     hal_print(" KB\n");
-    
+
     /* Read entire kernel image */
     if (!fs_seek(0)) {
         hal_print("ERROR: Cannot seek in kernel file\n");
         return 0;
     }
-    
-    if (!fs_read((void*)KERNEL_LOAD_ADDR, kernel_header.image_size, &bytes_read) ||
-        bytes_read != kernel_header.image_size) {
+
+    if (!fs_read((void*)KERNEL_LOAD_ADDR, kernel_image_size, &bytes_read) ||
+        bytes_read != kernel_image_size) {
         hal_print("ERROR: Cannot read kernel image\n");
         return 0;
     }
@@ -181,27 +183,27 @@ static int load_kernel(void) {
 static int load_sections(void) {
     /* New format uses direct offsets instead of section table */
     hal_print("Loading kernel sections...\n");
-    
+
     /* Code section */
     if (kernel_header.code_size > 0) {
-        uint8_t *src = (uint8_t*)(KERNEL_LOAD_ADDR + kernel_header.code_offset);
-        uint8_t *dst = (uint8_t*)(KERNEL_LOAD_ADDR + kernel_header.code_offset);
+        uintptr_t code_addr = (uintptr_t)KERNEL_LOAD_ADDR + kernel_header.code_offset;
+        (void)code_addr;  /* Suppress unused variable warning */
         /* Already in place, just verify */
         hal_print("  Code section: ");
         hal_print_dec(kernel_header.code_size);
         hal_print(" bytes\n");
     }
-    
+
     /* Data section */
     if (kernel_header.data_size > 0) {
-        uint8_t *src = (uint8_t*)(KERNEL_LOAD_ADDR + kernel_header.data_offset);
-        uint8_t *dst = (uint8_t*)(KERNEL_LOAD_ADDR + kernel_header.data_offset);
+        uintptr_t data_addr = (uintptr_t)KERNEL_LOAD_ADDR + kernel_header.data_offset;
+        (void)data_addr;  /* Suppress unused variable warning */
         /* Already in place, just verify */
         hal_print("  Data section: ");
         hal_print_dec(kernel_header.data_size);
         hal_print(" bytes\n");
     }
-    
+
     return 1;
 }
 
@@ -226,7 +228,9 @@ static void setup_boot_info(void) {
     
     /* Kernel information */
     boot_info.kernel_base = KERNEL_LOAD_ADDR;
-    boot_info.kernel_size = kernel_header.image_size;
+    /* Calculate total kernel size */
+    boot_info.kernel_size = kernel_header.code_size + kernel_header.data_size +
+                           kernel_header.config_size + kernel_header.signature_size;
     boot_info.entry_point = kernel_header.entry_point;
     
     /* Command line */
@@ -240,35 +244,7 @@ static void setup_boot_info(void) {
 /*
  * Halt the system
  */
-void halt(void) {
-    hal_print("System halted. Press any key to reboot...\n");
-    hal_wait_key();
-    hal_reboot();
-}
 
 /*
  * String functions
  */
-void strcpy(char *dst, const char *src) {
-    while (*src) {
-        *dst++ = *src++;
-    }
-    *dst = '\0';
-}
-
-void memcpy(void *dst, const void *src, uint64_t size) {
-    uint8_t *d = (uint8_t*)dst;
-    const uint8_t *s = (const uint8_t*)src;
-    
-    while (size--) {
-        *d++ = *s++;
-    }
-}
-
-void memset(void *ptr, uint8_t value, uint64_t size) {
-    uint8_t *p = (uint8_t*)ptr;
-    
-    while (size--) {
-        *p++ = value;
-    }
-}
