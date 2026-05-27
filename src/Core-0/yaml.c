@@ -242,37 +242,6 @@ void yaml_parser_destroy(yaml_parser_t* parser)
     }
 }
 
-static void yaml_free_node_tree(yaml_node_t* node) __attribute__((unused));
-
-static void yaml_free_node_tree(yaml_node_t* node)
-{
-    if (!node) {
-        return;
-    }
-    
-    /* 递归释放子节点 */
-    if (node->type == YAML_TYPE_MAPPING) {
-        yaml_node_t* child = node->children;
-        while (child) {
-            yaml_node_t* next = child->next;
-            yaml_free_node_tree(child);
-            child = next;
-        }
-    } else if (node->type == YAML_TYPE_SEQUENCE) {
-        yaml_node_t* child = node->children;
-        while (child) {
-            yaml_node_t* next = child->next;
-            yaml_free_node_tree(child);
-            child = next;
-        }
-    }
-    
-    /* 释放字符串值 */
-    if (node->type == YAML_TYPE_SCALAR) {
-        /* 标量值在数据块中，不需要单独释放 */
-    }
-}
-
 /* 解析YAML */
 int yaml_parse(yaml_parser_t* parser)
 {

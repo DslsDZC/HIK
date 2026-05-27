@@ -80,4 +80,7 @@ void pmm_get_stats(u64 *total_pages, u64 *free_pages, u64 *used_pages);
 u64 used_memory(void);
 u64 total_memory(void);
 
+/* 扫描最大连续空闲区间（AP 后台任务用，无锁只读） */
+void pmm_scan_largest_free(phys_addr_t *base_out, u64 *count_out);
+
 #endif /* HIC_KERNEL_PMM_H */

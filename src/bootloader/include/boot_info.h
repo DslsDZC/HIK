@@ -2,6 +2,52 @@
 #define HIC_BOOTLOADER_BOOT_INFO_H
 
 #include <stdint.h>
+#include <string.h>
+
+/* ===== TLV 传输格式（与内核一致） ===== */
+
+#define BOOT_INFO_ADDR      0x50000000
+#define BOOT_INFO_MAGIC     0x48494342  /* "HICB" */
+
+typedef struct {
+    uint32_t magic;
+    uint32_t total_size;
+    uint32_t version;
+    uint32_t flags;
+    uint32_t entry_count;
+    uint8_t  reserved[8];
+} boot_info_header_t;
+
+typedef struct {
+    uint32_t tag;
+    uint32_t len;
+    uint8_t  data[];
+} __attribute__((packed)) boot_info_tlv_t;
+
+#define TAG_END             0
+#define TAG_MEM_MAP         1
+#define TAG_CPU_COUNT       2
+#define TAG_CMDLINE         4
+#define TAG_RSDP            5
+#define TAG_FRAMEBUFFER     6
+#define TAG_SERIAL_PORT     7
+#define TAG_KERNEL_BASE     8
+#define TAG_KERNEL_SIZE     9
+#define TAG_ENTRY_POINT     10
+#define TAG_STACK_TOP       11
+#define TAG_MODULE          12
+#define TAG_DISK_INFO       13
+#define TAG_GDT             16
+#define TAG_ARCH            17
+#define TAG_HARDWARE_DATA   15
+
+static inline uint8_t *tlv_put(uint8_t *pos, uint32_t tag, const void *data, uint32_t len) {
+    boot_info_tlv_t *tlv = (boot_info_tlv_t *)pos;
+    tlv->tag = tag;
+    tlv->len = len;
+    if (len > 0 && data) memcpy(tlv->data, data, len);
+    return pos + sizeof(boot_info_tlv_t) + len;
+}
 
 // HIC引导信息结构魔数
 #define HIC_BOOT_INFO_MAGIC  0x48494B21  // "HIC!"

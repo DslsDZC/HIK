@@ -28,11 +28,12 @@
 /* 外部变量 */
 extern boot_state_t g_boot_state;
 
-/* ===== 中断路由表（构建时静态生成） ===== */
+extern void scheduler_tick(void);
 
-volatile irq_route_entry_t irq_table[256];
-
-/* ===== 动态中断池管理（无锁设计） ===== */
+volatile irq_route_entry_t irq_table[256] = {
+    [30] = { .handler_address = (u64)scheduler_tick, .initialized = 1 },
+    [32] = { .handler_address = (u64)scheduler_tick, .initialized = 1 },
+};
 
 /* 动态池分配位图 */
 static volatile u32 g_dynamic_bitmap[IRQ_DYNAMIC_COUNT / 32 + 1];
@@ -50,30 +51,16 @@ static volatile u32 g_dynamic_high_watermark = 0;
 static inline u32 atomic_bts(volatile u32 *addr, u32 bit)
 {
     u32 mask = 1U << bit;
-    u32 old;
-    
-    /* 使用原子交换实现无锁测试并设置 */
-    do {
-        old = *addr;
-        if (old & mask) {
-            return 1;  /* 已被占用 */
-        }
-    } while (!__sync_bool_compare_and_swap(addr, old, old | mask));
-    
-    return 0;  /* 成功设置 */
+    u32 old = *addr;
+    if (old & mask) return 1;
+    *addr = old | mask;
+    return 0;
 }
 
-/**
- * 原子清除位
- */
 static inline void atomic_btr(volatile u32 *addr, u32 bit)
 {
     u32 mask = 1U << bit;
-    u32 old;
-    
-    do {
-        old = *addr;
-    } while (!__sync_bool_compare_and_swap(addr, old, old & ~mask));
+    *addr &= ~mask;
 }
 
 /**
@@ -83,15 +70,10 @@ static inline u32 atomic_inc_if_below(volatile u32 *addr, u32 limit)
 {
     u32 old, new_val;
     
-    do {
-        old = *addr;
-        if (old >= limit) {
-            return old;
-        }
-        new_val = old + 1;
-    } while (!__sync_bool_compare_and_swap(addr, old, new_val));
-    
-    return new_val;
+    old = *addr;
+    if (old >= limit) return old;
+    *addr = old + 1;
+    return old + 1;
 }
 
 /* ===== 初始化 ===== */
@@ -100,10 +82,7 @@ void irq_controller_init(void)
 {
     console_puts("[IRQ] Init: static routing + dynamic pool\n");
     
-    /* 清空路由表 */
-    memzero((void*)irq_table, sizeof(irq_table));
-    
-    /* 初始化动态池位图 */
+    /* 动态池位图（静态条目在 irq_table 初始化器中已设好） */
     memzero((void*)g_dynamic_bitmap, sizeof(g_dynamic_bitmap));
     g_dynamic_allocated = 0;
     g_dynamic_high_watermark = 0;
@@ -201,7 +180,7 @@ u32 irq_dynamic_alloc(void)
             vector = IRQ_DYNAMIC_START + i;
             
             /* 原子更新统计 */
-            u32 allocated = __sync_add_and_fetch(&g_dynamic_allocated, 1);
+            u32 allocated = ++g_dynamic_allocated;
             
             /* 更新高水位（允许竞态，不影响正确性） */
             if (allocated > g_dynamic_high_watermark) {
@@ -233,7 +212,7 @@ void irq_dynamic_free(u32 vector)
     irq_table[vector].endpoint_cap = CAP_HANDLE_INVALID;
     
     /* 原子更新统计 */
-    __sync_sub_and_fetch(&g_dynamic_allocated, 1);
+    g_dynamic_allocated--;
     
     /* 禁用硬件中断 */
     irq_disable(vector);

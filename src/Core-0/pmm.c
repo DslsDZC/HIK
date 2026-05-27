@@ -11,7 +11,6 @@
 
 #include "pmm.h"
 #include "domain.h"
-#include "formal_verification.h"
 #include "lib/mem.h"
 #include "lib/console.h"
 
@@ -29,23 +28,22 @@ static mem_region_t *mem_regions = NULL;
 static u64 g_total_memory = 0;
 static u64 g_used_memory = 0;
 
-/* 递归保护标志（避免在映射时递归分配） */
-static int in_mapping = 0;
 
-/* 位图操作 */
+
+/* 位图操作（启动后单核，后续多核通过编译选项保证原子性） */
 static inline void set_bit(u8 *bitmap, u64 index)
 {
-    bitmap[index / 8] |= (1 << (index % 8));
+    bitmap[index / 8] |= (u8)(1 << (index % 8));
 }
 
 static inline void clear_bit(u8 *bitmap, u64 index)
 {
-    bitmap[index / 8] &= ~(u8)(1 << (index % 8));
+    bitmap[index / 8] &= (u8)~(1 << (index % 8));
 }
 
 static inline int test_bit(u8 *bitmap, u64 index)
 {
-    return bitmap[index / 8] & (1 << (index % 8));
+    return (bitmap[index / 8] >> (index % 8)) & 1;
 }
 
 /**
@@ -304,24 +302,18 @@ hic_status_t pmm_alloc_frames(domain_id_t owner, u32 count,
         return HIC_ERROR_NO_MEMORY;
     }
     
-    /* 标记为已使用 */
     for (u32 i = 0; i < count; i++) {
+        if (test_bit(frame_bitmap, start + i)) {
+            console_puts("[PMM] DOUBLE ALLOC at frame ");
+            console_putu64(start + i);
+            console_puts("\n");
+            while (1) hal_halt();
+        }
         set_bit(frame_bitmap, start + i);
     }
     
     free_frames -= count;
     g_used_memory += count * PAGE_SIZE;
-    
-    /* 调用形式化验证 */
-    if (fv_check_all_invariants() != FV_SUCCESS) {
-        console_puts("[PMM] Invariant violation detected!\n");
-    }
-    
-    phys_addr_t phys_addr = start * PAGE_SIZE;
-    
-    /* 内存已在 pagetable_init 中预先映射，无需再映射 */
-    
-    *out = phys_addr;
     
     return HIC_SUCCESS;
 }
@@ -404,10 +396,7 @@ hic_status_t pmm_free_frames(phys_addr_t addr, u32 count)
     free_frames += count;
     g_used_memory -= count * PAGE_SIZE;
     
-    /* 调用形式化验证 */
-    if (fv_check_all_invariants() != FV_SUCCESS) {
-        console_puts("[PMM] Invariant violation detected after pmm_free_frames!\n");
-    }
+
     
     return HIC_SUCCESS;
 }
@@ -461,6 +450,32 @@ void pmm_get_stats(u64 *total_pages, u64 *free_pages, u64 *used_pages)
     if (total_pages) *total_pages = total_frames;
     if (free_pages) *free_pages = free_frames;
     if (used_pages) *used_pages = total_frames - free_frames;
+}
+
+void pmm_scan_largest_free(phys_addr_t *base_out, u64 *count_out)
+{
+    u64 best_start = 0, best_len = 0;
+    u64 cur_start = 0, cur_len = 0;
+
+    for (u64 i = 0; i < max_frames; i++) {
+        if (!test_bit(frame_bitmap, i)) {
+            if (cur_len == 0) cur_start = i;
+            cur_len++;
+        } else {
+            if (cur_len > best_len) {
+                best_len = cur_len;
+                best_start = cur_start;
+            }
+            cur_len = 0;
+        }
+    }
+    if (cur_len > best_len) {
+        best_len = cur_len;
+        best_start = cur_start;
+    }
+
+    *base_out = best_start * PAGE_SIZE;
+    *count_out = best_len;
 }
 
 /* 获取已用内存（字节） */

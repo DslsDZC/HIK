@@ -11,7 +11,6 @@
 
 #include <stdarg.h>
 #include "console.h"
-#include "minimal_uart.h"
 #include "mem.h"
 #include "hal.h"
 
@@ -30,15 +29,14 @@ void console_clear(void)
     /* 串口清屏：发送ANSI清屏序列 */
     const char *clear_seq = "\033[2J\033[H";
     while (*clear_seq) {
-        minimal_uart_putc(*clear_seq++);
+        hal_uart_putc(*clear_seq++);
     }
 }
 
 /* 输出字符 */
 void console_putchar(char c)
 {
-    /* 直接输出字符，去掉强制转换 */
-    __asm__ volatile("outb %%al, %%dx" : : "a"(c), "d"(0x3F8));
+    hal_uart_putc(c);
 }
 
 /* 输出字符串 */
@@ -49,7 +47,7 @@ void console_puts(const char *str)
     }
     
     while (*str != '\0') {
-        __asm__ volatile("outb %%al, %%dx" : : "a"(*str), "d"(0x3F8));
+        hal_uart_putc(*str);
         str++;
     }
 }

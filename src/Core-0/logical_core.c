@@ -52,9 +52,6 @@ static u32 g_next_logical_core_id = 0;
 /* 全局借用信息表 */
 static logical_core_borrow_info_t g_borrow_info[MAX_LOGICAL_CORES];
 
-/* 迁移配置 */
-static migration_config_t g_migration_config = DEFAULT_MIGRATION_CONFIG;
-
 
 /* ==================== 性能优化索引 ==================== */
 

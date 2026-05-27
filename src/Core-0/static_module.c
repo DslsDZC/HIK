@@ -230,6 +230,22 @@ int static_module_load_all(void)
             continue;
         }
 
+        /* 步骤4.5: 注册 IPC 3.0 入口页 */
+        {
+            ipc3_service_id_t sid;
+            virt_addr_t bus_entry = (virt_addr_t)((u64)module->code_start + module->entry_offset);
+            hic_status_t st = ipc3_register_service(
+                g_module_runtime[module_idx].domain_id, bus_entry, 0, &sid);
+            if (st == HIC_SUCCESS) {
+                g_module_runtime[module_idx].service_id = sid;
+                ipc3_authorize(sid, HIC_DOMAIN_CORE);
+                ipc3_authorize(sid, g_module_runtime[module_idx].domain_id);
+                console_puts("[STATIC_MODULE]   IPC3 entry page registered (id=");
+                console_putu32(sid);
+                console_puts(")\n");
+            }
+        }
+
         g_module_runtime[module_idx].running = true;
         loaded_count++;
         
@@ -404,24 +420,20 @@ int static_module_setup_capabilities(static_module_desc_t *module, u32 runtime_i
 
 /* ==================== 服务入口点查找表 ==================== */
 
-/* 静态服务入口函数（由各服务实现） */
-extern int vga_service_start(void);
-extern int verifier_start(void);
-extern int ide_driver_start(void);
-extern int fat32_service_start(void);
-extern int init_launcher_start(void);
+/* 静态服务入口函数（弱符号，未链接时自动为 NULL，跳过加载） */
+__attribute__((weak)) int vga_service_start(void) { return -1; }
+__attribute__((weak)) int verifier_start(void) { return -1; }
+__attribute__((weak)) int ide_driver_start(void) { return -1; }
+__attribute__((weak)) int fat32_service_start(void) { return -1; }
+__attribute__((weak)) int init_launcher_start(void) { return -1; }
+__attribute__((weak)) int _memory_service_entry(void) { return -1; }
+__attribute__((weak)) int _device_manager_entry(void) { return -1; }
+__attribute__((weak)) hic_status_t security_monitor_service_start(void) { return HIC_ERROR_NOT_SUPPORTED; }
 
-/* 额外服务入口函数 */
-extern int _memory_service_entry(void);
-extern int _device_manager_entry(void);
-extern hic_status_t security_monitor_service_start(void);
-
-/* security_monitor 的包装函数 */
 static int security_monitor_start_wrapper(void) {
     return (int)security_monitor_service_start();
 }
 
-/* 服务入口点查找表 */
 typedef struct {
     const char *name;
     int (*entry_func)(void);

@@ -20,10 +20,10 @@
 #include "build_config.h"
 #include "runtime_config.h"
 #include "audit.h"
-#include "formal_verification.h"
 #include "amp.h"
 #include "logical_core.h"
 #include "ipc3.h"
+#include <string.h>
 #include "lib/console.h"
 #include "boot_info.h"
 #include "minimal_uart.h"
@@ -41,104 +41,75 @@ extern hic_boot_info_t *g_boot_info;
  * 内核主入口点
  * 由kernel_start调用，完成所有初始化后进入主循环
  */
-void kernel_main(void *info)
+void kernel_main(void)
 {
-    /* 第一条指令：调试输出 'A'，表示进入了 kernel_main */
     hal_uart_putc('A');
 
-    /* ==================== 注意：串口已在 bootloader 中初始化，这里不重新初始化 ==================== */
-
-    /* ==================== 第二阶段：安全验证 ==================== */
-
-    /* 转换参数类型 */
-    hic_boot_info_t *boot_info = (hic_boot_info_t *)info;
-
-    /* 【安全检查1】验证boot_info指针 */
-    if (boot_info == NULL) {
-        goto panic;
-    }
-
-    /* 保存启动信息（必须在最前面） */
-    g_boot_state.boot_info = boot_info;
-    g_boot_info = boot_info;
-
-    /* 【安全检查2】验证boot_info魔数 */
-    if (boot_info->magic != HIC_BOOT_INFO_MAGIC) {
-        goto panic;
-    }
-
-    /* 【安全检查3】验证boot_info版本 */
-    if (boot_info->version != HIC_BOOT_INFO_VERSION) {
-        goto panic;
-    }
-
-    /* ==================== 第三阶段：串口输出 ==================== */
+    hic_boot_info_t *boot_info = g_boot_info;
+    if (boot_info == NULL) goto panic;
 
     console_puts("hello\n");
 
-    /* ==================== 第三阶段：审计日志系统初始化 ==================== */
-    
-    /* 初始化审计日志系统（此时串口已经初始化） */
+    /* ===== 审计日志系统初始化 ===== */
     audit_system_init();
-    
-    /* 分配审计日志缓冲区（从可用内存的末尾开始） */
-    if (boot_info && boot_info->mem_map && boot_info->mem_map_entry_count > 0) {
-        phys_addr_t audit_buffer_base = 0;
-        size_t audit_buffer_size = 0;
-        
+
+    phys_addr_t audit_buffer_base = 0;
+    size_t audit_buffer_size = 0;
+
+    if (boot_info->mem_map && boot_info->mem_map_entry_count > 0) {
         for (u64 i = 0; i < boot_info->mem_map_entry_count; i++) {
-            hic_mem_entry_t* entry = &boot_info->mem_map[i];
-            if (entry->type == HIC_MEM_TYPE_USABLE && entry->length > audit_buffer_size) {
-                audit_buffer_base = entry->base_address + entry->length - 0x10000;
+            hic_mem_entry_t *e = &boot_info->mem_map[i];
+            if (e->type == HIC_MEM_TYPE_USABLE && e->length > audit_buffer_size) {
+                audit_buffer_base = e->base_address + e->length - 0x10000;
                 audit_buffer_size = 0x10000;
                 break;
             }
         }
-        
-        if (audit_buffer_base != 0) {
+        if (audit_buffer_base) {
             audit_system_init_buffer(audit_buffer_base, audit_buffer_size);
             audit_log_event(AUDIT_EVENT_DOMAIN_CREATE, 0, 0, 0, NULL, 0, true);
         }
     }
-    
-    /* ==================== 第四阶段：验证启动信息 ==================== */
-    
+
     if (!boot_info_validate(boot_info)) {
         audit_log_event(AUDIT_EVENT_EXCEPTION, 0, 0, 0, NULL, 0, false);
         console_puts("[BOOT] >>> PANIC: boot_info validation FAILED <<<\n");
         goto panic;
     }
-    
     console_puts("[BOOT] >>> boot_info_validate PASSED <<<\n");
-    console_puts("[BOOT] All boot information validated successfully\n");
-    
+
     audit_log_event(AUDIT_EVENT_PMM_ALLOC, 0, 0, 0, NULL, 0, true);
+
+    /* ===== 从 TLV 硬件数据解析到运行时状态 ===== */
+    if (boot_info->hardware.hw_data && boot_info->hardware.hw_size >= sizeof(hardware_probe_result_t)) {
+        memcpy(&g_boot_state.hw, boot_info->hardware.hw_data, sizeof(hardware_probe_result_t));
+    }
     
-    /* ==================== 第三阶段：配置系统初始化 ==================== */
-    
-    /* 【步骤：初始化运行时配置系统】 */
+    /* ===== 运行时配置 ===== */
     console_puts("\n[BOOT] STEP 0: Initializing Runtime Configuration\n");
     runtime_config_init();
     console_puts("[BOOT] Runtime configuration initialized\n");
     
-    /* 【步骤：从引导信息加载配置】 */
     console_puts("[BOOT] Loading configuration from boot info...\n");
     runtime_config_load_from_bootinfo();
     console_puts("[BOOT] Configuration loaded from boot info\n");
     
-    /* 【步骤：验证配置一致性】 */
     if (!runtime_config_validate()) {
         console_puts("[BOOT] WARNING: Runtime configuration validation failed, using defaults\n");
     } else {
         console_puts("[BOOT] Runtime configuration validated\n");
     }
     
-    /* ==================== 第四阶段：核心子系统初始化 ==================== */
+    /* ===== 核心子系统初始化 ===== */
     
-    /* 【步骤1：内存管理器初始化】 */
     console_puts("\n[BOOT] STEP 1: Initializing Memory Manager\n");
     boot_info_init_memory(boot_info);
     console_puts("[BOOT] Memory manager initialization completed\n");
+
+    /* FIX: 标记审计缓冲区为已使用，防止 PMM 分配出去 */
+    if (audit_buffer_base != 0) {
+        pmm_mark_used(audit_buffer_base, audit_buffer_size);
+    }
     
     /* 【步骤1.2：内存布局初始化 - 已移到 memory_service】 */
     /* memory_layout_init 现在由 memory_service 负责，遵循机制与策略分离原则 */
@@ -167,6 +138,12 @@ void kernel_main(void *info)
     console_puts("\n[BOOT] STEP 4: Initializing Scheduler\n");
     scheduler_init();
     console_puts("[BOOT] Scheduler initialization completed\n");
+
+    /* 【步骤4.2：定时器初始化（Core-0 调度机制）】 */
+    extern void timer_init(void) __attribute__((weak));
+    if (timer_init) {
+        timer_init();
+    }
     
     /* 【步骤4.4：逻辑核心系统初始化】 */
     console_puts("\n[BOOT] STEP 4.4: Initializing Logical Core System\n");

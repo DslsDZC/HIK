@@ -1,140 +1,67 @@
 HIC Kernel
 =========
 
-The HIC (Hierarchical Isolation Core) is a formally verified microkernel with a
-three-tier privilege architecture, mathematical proof of security properties,
-and runtime invariant checking.
+HIC (Hierarchical Isolation Core) is a multi-architecture microkernel with a
+three-tier privilege architecture, IPC 3.0 (entry-page self-check cross-domain
+call), per-core capability slot partitioning, and formal specifications
+(Isabelle/HOL).
+
+Supported architectures:
+- x86_64 (QEMU, UEFI)
+- ARM64 (QEMU virt, GICv3, PL011)
 
 Quick Start
 -----------
 
-* Report a bug: See docs/Wiki_zh_cn/FAQ.md
-* Get the latest version: https://github.com/DslsDZC/HIC
-* Build the kernel: See docs/Wiki_zh_cn/03-QuickStart.md
-* View architecture: docs/Wiki_zh_cn/02-Architecture.md
+ARM64 (QEMU):
 
-Essential Documentation
+  make ARCH=arm64
+  make ARCH=arm64 run
+
+x86_64 (UEFI):
+
+  cd build && make
+
+Build output goes to build/ for both architectures.
+
+Architecture
+------------
+
+- Three-layer model: Core-0 (Ring 0), Privileged-1 (Ring 0, MMU isolated),
+  Application-3 (Ring 3)
+- IPC 3.0: call [entry_page] -> bt [bitmap] -> jmp [business_page]
+- Per-core capability slot allocation (no global lock)
+- TLV boot protocol (bootloader writes to 0x50000000, kernel reads)
+- Static interrupt routing table (timer entry built at compile time)
+
+Documentation
+-------------
+
+- Architecture: docs/TD/三层模型.md
+- IPC 3.0: docs/TD/HICIPC模型3.0.md
+- ABI specification: docs/TD/ABI规范.md
+- API list: docs/TD/API列表.md
+- Porting guide: docs/TD/可移植性.md
+- CHAL abstraction: docs/TD/CHAL兼容层.md
+- TD README: docs/TD/README.md
+
+Adding an Architecture
 -----------------------
 
-All users should be familiar with:
+Create arch/<name>/ with:
+- hal_impl.c    (HAL functions, UART)
+- pagetable.c   (page table manipulation)
+- entry.S       (boot entry, VBAR/IDT)
+- context.S     (context save/restore, context_switch)
+- interrupts.S  (exception handlers)
+- timer.c       (timer init -> scheduler_tick)
+- gic.c / amp.c (SMP boot)
+- linker.ld     (memory layout)
 
-* Building requirements: docs/Wiki_zh_cn/05-DevelopmentEnvironment.md
-* Code standards: docs/Wiki_zh_cn/06-CodingStandards.md
-* License: See LICENSE
-* Mathematical proofs: src/Core-0/math_proofs.tex
+Build with: make ARCH=<name>
 
-Documentation is available in the docs directory.
+License
+-------
 
-
-Who Are You?
-============
-
-Find your role below:
-
-* New Kernel Developer - Getting started with HIC development
-* Academic Researcher - Studying formal verification and security proofs
-* Security Expert - Analyzing capability system and isolation guarantees
-* System Administrator - Configuring and troubleshooting
-* Privileged Service Developer - Building Privileged-1 layer services
-* Application Developer - Creating Application-3 layer applications
-
-
-For Specific Users
-==================
-
-New Kernel Developer
---------------------
-
-Welcome! Start your HIC development journey here:
-
-* Getting Started: docs/Wiki_zh_cn/03-QuickStart.md
-* Build System: docs/Wiki_zh_cn/04-BuildSystem.md
-* Core-0 Implementation: docs/Wiki_zh_cn/08-Core0.md
-* Capability System: docs/Wiki_zh_cn/11-CapabilitySystem.md
-* Security Mechanisms: docs/Wiki_zh_cn/13-SecurityMechanisms.md
-* Development Environment: docs/Wiki_zh_cn/05-DevelopmentEnvironment.md
-
-Academic Researcher
--------------------
-
-Explore HIC's formal verification and security proofs:
-
-* Three-Layer Architecture: docs/Wiki_zh_cn/02-Architecture.md
-* Mathematical Proofs: src/Core-0/math_proofs.tex
-* Formal Verification: src/Core-0/formal_verification.c
-* Capability Theory: docs/Wiki_zh_cn/11-CapabilitySystem.md
-* Security Guarantees: docs/Wiki_zh_cn/13-SecurityMechanisms.md
-
-Security Expert
----------------
-
-Security documentation and verification guides:
-
-* Security Mechanisms: docs/Wiki_zh_cn/13-SecurityMechanisms.md
-* Capability System: docs/Wiki_zh_cn/11-CapabilitySystem.md
-* Formal Verification: src/Core-0/formal_verification.c
-* Audit System: src/Core-0/audit.c
-* Domain Isolation: src/Core-0/domain.c
-* Compliance Report: docs/COMPLIANCE_REPORT.md
-
-System Administrator
---------------------
-
-Configure, tune, and troubleshoot HIC systems:
-
-* Quick Start: docs/Wiki_zh_cn/03-QuickStart.md
-* Build System: docs/Wiki_zh_cn/04-BuildSystem.md
-* Troubleshooting: docs/Wiki_zh_cn/FAQ.md
-* Boot Configuration: docs/TD/引导加载程序.md
-* BIOS/UEFI Support: docs/TD/bios.md, docs/TD/uefi.md
-
-Privileged Service Developer
----------------------------
-
-Build Privileged-1 layer services:
-
-* Service Guide: src/Core-0/examples/PRIVILEGED_SERVICE_GUIDE.md
-* Example Service: src/Core-0/examples/example_service.c
-* Domain Switching: src/Core-0/domain_switch.c
-* IPC Communication: src/Core-0/syscall.c
-* Capability Usage: src/Core-0/capability.c
-
-Application Developer
-----------------------
-
-Create Application-3 layer applications:
-
-* System Calls: src/Core-0/syscall.c
-* Capability System: docs/Wiki_zh_cn/11-CapabilitySystem.md
-* API Reference: docs/Wiki_zh_cn/11-CapabilitySystem.md
-* Development Guide: docs/Wiki/05-DevelopmentEnvironment.md
-
-Core Documentation
-=================
-
-* Project Overview: docs/Wiki_zh_cn/01-Overview.md
-* Architecture Design: docs/Wiki_zh_cn/02-Architecture.md
-* Quick Start Guide: docs/Wiki_zh_cn/03-QuickStart.md
-* Build System: docs/Wiki_zh_cn/04-BuildSystem.md
-* Development Environment: docs/Wiki_zh_cn/05-DevelopmentEnvironment.md
-* Coding Standards: docs/Wiki_zh_cn/06-CodingStandards.md
-* Testing Guide: docs/Wiki_zh_cn/07-Testing.md
-
-
-Advanced Topics
-===============
-
-* Formal Verification: src/Core-0/formal_verification.c, src/Core-0/math_proofs.tex
-* Capability System: docs/Wiki_zh_cn/11-CapabilitySystem.md
-* Security Mechanisms: docs/Wiki_zh_cn/13-SecurityMechanisms.md
-* Core-0 Layer: docs/Wiki_zh_cn/08-Core0.md
-
-
-Communication and Support
-=========================
-
-* Documentation: docs/Wiki_zh_cn/index.md
-* FAQ: docs/Wiki_zh_cn/FAQ.md
-* Build Scripts: scripts/build_system.py, scripts/build_system.sh
-* Repository: https://github.com/DslsDZC/HIC
-* License: LICENSE (GPL-2.0)
+GPL-2.0 with LicenseRef-HIC-service-exception.
+See LICENSE and LICENSES/ for details.

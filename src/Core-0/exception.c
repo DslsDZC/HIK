@@ -120,6 +120,6 @@ void kernel_panic(const char* message, ...)
 
     /* 死循环，系统已无法继续运行 */
     while (1) {
-        __asm__ volatile("hlt");
+        halt_cpu();
     }
 }

@@ -23,6 +23,7 @@
 #include "capability.h"
 #include "domain.h"
 #include "pmm.h"
+#include "hal.h"
 #include "atomic.h"
 #include "lib/mem.h"
 #include "lib/string.h"
@@ -31,6 +32,20 @@
 
 /* ==================== 全局能力表 ==================== */
 __capability cap_entry_t g_global_cap_table[CAP_TABLE_SIZE];
+
+/* ==================== Per-core 槽位分配器 ==================== */
+/* 每个核独占 CAP_SLOTS_PER_CORE 个槽位，互不竞争 */
+u32 g_cap_next_free[CAP_MAX_CORES];
+
+static inline cap_id_t cap_core_first_free(void) {
+    cpu_id_t core = hal_get_cpu_id();
+    if (core >= CAP_MAX_CORES) core = CAP_MAX_CORES - 1;
+    cap_id_t slot = g_cap_next_free[core];
+    cap_id_t end = cap_core_end(core);
+    if (slot >= end) return HIC_CAP_INVALID;
+    g_cap_next_free[core] = slot + 1;
+    return slot;
+}
 
 /* ==================== 共享内存区域配置 ==================== */
 #define MAX_SHMEM_REGIONS  64
@@ -62,6 +77,16 @@ void capability_system_init(void) {
     console_putu32(CAP_TABLE_SIZE);
     console_puts(" entries)\n");
     
+    /* 初始化 per-core 分配指针 */
+    for (u32 i = 0; i < CAP_MAX_CORES; i++) {
+        g_cap_next_free[i] = cap_core_base(i);
+    }
+    console_puts("[CAP] Per-core slot allocators initialized (");
+    console_putu32(CAP_SLOTS_PER_CORE);
+    console_puts(" slots/core, ");
+    console_putu32(CAP_MAX_CORES);
+    console_puts(" cores max)\n");
+    
     memzero(g_derivatives, sizeof(g_derivatives));
     console_puts("[CAP] Derivative table cleared\n");
     
@@ -75,7 +100,7 @@ void capability_system_init(void) {
     g_domain_keys[HIC_DOMAIN_CORE].multiplier = 0x9E3779B9;
     console_puts("[CAP] Core-0 domain key initialized\n");
     
-    console_puts("[CAP] Capability system initialized (secure & fast, < 5ns)\n");
+    console_puts("[CAP] Capability system initialized (no-lock per-core slots)\n");
     console_puts("[CAP] Security: Handle obfuscation enabled\n");
     console_puts("[CAP] Performance: Inlined verification ready\n");
 }
@@ -118,31 +143,20 @@ hic_status_t cap_create_memory(domain_id_t owner, phys_addr_t base,
         return HIC_ERROR_INVALID_PARAM;
     }
 
-    bool irq = atomic_enter_critical();
-
-    /* 快速查找空闲槽位（从i=0开始，使用所有槽位） */
-    cap_id_t cap = HIC_CAP_INVALID;
-    for (u32 i = 0; i < CAP_TABLE_SIZE && cap == HIC_CAP_INVALID; i++) {
-        /* 检查槽位是否空闲（cap_id为0或HIC_CAP_INVALID表示空闲） */
-        if (g_global_cap_table[i].cap_id == 0 || g_global_cap_table[i].cap_id == HIC_CAP_INVALID) {
-            cap = i;
-        }
-    }
+    cpu_id_t core = hal_get_cpu_id();
+    cap_id_t cap = cap_core_first_free();
 
     if (cap == HIC_CAP_INVALID) {
-        atomic_exit_critical(irq);
         return HIC_ERROR_NO_MEMORY;
     }
 
-    /* 初始化能力 */
     g_global_cap_table[cap].cap_id = cap;
     g_global_cap_table[cap].rights = rights;
     g_global_cap_table[cap].owner = owner;
+    g_global_cap_table[cap].owner_core = (u8)core;
     g_global_cap_table[cap].flags = 0;
     g_global_cap_table[cap].memory.base = base;
     g_global_cap_table[cap].memory.size = size;
-
-    atomic_exit_critical(irq);
 
     *out = cap;
     return HIC_SUCCESS;
@@ -154,29 +168,20 @@ hic_status_t cap_create_thread(domain_id_t owner, thread_id_t thread_id, cap_id_
         return HIC_ERROR_INVALID_PARAM;
     }
 
-    bool irq = atomic_enter_critical();
-
-    cap_id_t cap = HIC_CAP_INVALID;
-    for (u32 i = 1; i < CAP_TABLE_SIZE; i++) {
-        if (g_global_cap_table[i].cap_id == 0 || g_global_cap_table[i].cap_id == HIC_CAP_INVALID) {
-            cap = i;
-            break;
-        }
-    }
+    cpu_id_t core = hal_get_cpu_id();
+    cap_id_t cap = cap_core_first_free();
 
     if (cap == HIC_CAP_INVALID) {
-        atomic_exit_critical(irq);
         return HIC_ERROR_NO_RESOURCE;
     }
 
     g_global_cap_table[cap].cap_id = cap;
     g_global_cap_table[cap].rights = CAP_TYPE_THREAD;
     g_global_cap_table[cap].owner = owner;
+    g_global_cap_table[cap].owner_core = (u8)core;
     g_global_cap_table[cap].flags = 0;
     g_global_cap_table[cap].thread_efc.thread_id = thread_id;
     g_global_cap_table[cap].thread_efc.reserved = 0;
-
-    atomic_exit_critical(irq);
 
     *out = cap;
     return HIC_SUCCESS;
@@ -332,34 +337,32 @@ static void cap_revoke_recursive_impl(cap_id_t cap, u32 depth) {
  * @return 状态码
  */
 hic_status_t cap_revoke(cap_id_t cap) {
-    /* 首先检查无效值（0xFFFFFFFF） */
-    if (cap == HIC_CAP_INVALID) {
-        return HIC_ERROR_CAP_INVALID;
+    if (cap == HIC_CAP_INVALID) return HIC_ERROR_CAP_INVALID;
+    if (cap >= CAP_TABLE_SIZE) return HIC_ERROR_INVALID_PARAM;
+
+    /* Per-core slot 分区：只有 owner_core 能撤销 */
+    u8 core = g_global_cap_table[cap].owner_core;
+    if (hal_get_cpu_id() != (cpu_id_t)core) {
+        return HIC_ERROR_PERMISSION;
     }
-    /* 然后检查是否超出表大小 */
-    if (cap >= CAP_TABLE_SIZE) {
-        return HIC_ERROR_INVALID_PARAM;
-    }
-    
-    bool irq = atomic_enter_critical();
-    
-    /* 检查能力是否存在 */
+
     if (g_global_cap_table[cap].cap_id != cap) {
-        atomic_exit_critical(irq);
         return HIC_ERROR_CAP_INVALID;
     }
-    
-    /* 检查是否已被撤销 */
     if (g_global_cap_table[cap].flags & CAP_FLAG_REVOKED) {
-        atomic_exit_critical(irq);
-        return HIC_SUCCESS;  /* 幂等操作：已撤销视为成功 */
+        return HIC_SUCCESS;
     }
-    
-    /* 递归撤销 */
+
     cap_revoke_recursive_impl(cap, 0);
-    
-    atomic_exit_critical(irq);
-    
+    return HIC_SUCCESS;
+}
+
+/* BSP 强制撤销（域回收、系统清理，可跨核操作） */
+hic_status_t cap_force_revoke(cap_id_t cap) {
+    if (cap >= CAP_TABLE_SIZE) return HIC_ERROR_INVALID_PARAM;
+    if (g_global_cap_table[cap].cap_id != cap) return HIC_ERROR_CAP_INVALID;
+    if (g_global_cap_table[cap].flags & CAP_FLAG_REVOKED) return HIC_SUCCESS;
+    cap_revoke_recursive_impl(cap, 0);
     return HIC_SUCCESS;
 }
 
@@ -395,62 +398,33 @@ hic_status_t cap_transfer_with_attenuation(domain_id_t from, domain_id_t to,
         cap >= CAP_TABLE_SIZE || out == NULL) {
         return HIC_ERROR_INVALID_PARAM;
     }
-    
-    bool irq = atomic_enter_critical();
-    
+
     cap_entry_t *entry = &g_global_cap_table[cap];
-    
-    /* 检查能力有效性 */
-    if (entry->cap_id != cap) {
-        atomic_exit_critical(irq);
+    if (entry->cap_id != cap || entry->owner != from) {
         return HIC_ERROR_CAP_INVALID;
     }
-    
-    /* 检查所有权 */
-    if (entry->owner != from) {
-        atomic_exit_critical(irq);
+    if ((attenuated_rights & entry->rights) != attenuated_rights) {
         return HIC_ERROR_PERMISSION;
     }
-    
-    /* 检查权限单调性：衰减权限必须是原权限的子集 */
-    if ((attenuated_rights & entry->rights) != attenuated_rights) {
-        atomic_exit_critical(irq);
-        return HIC_ERROR_PERMISSION;  /* 不能授予比持有更多的权限 */
-    }
-    
-    /* 创建派生能力 */
-    cap_id_t new_cap = HIC_CAP_INVALID;
-    for (u32 i = 0; i < CAP_TABLE_SIZE; i++) {
-        if (g_global_cap_table[i].cap_id != i) {
-            new_cap = i;
-            break;
-        }
-    }
-    
+
+    cap_id_t new_cap = cap_core_first_free();
     if (new_cap == HIC_CAP_INVALID) {
-        atomic_exit_critical(irq);
         return HIC_ERROR_NO_MEMORY;
     }
-    
-    /* 初始化派生能力 */
+
     cap_entry_t *new_entry = &g_global_cap_table[new_cap];
     new_entry->cap_id = new_cap;
-    new_entry->rights = attenuated_rights;  /* 使用衰减后的权限 */
+    new_entry->rights = attenuated_rights;
     new_entry->owner = to;
+    new_entry->owner_core = (u8)hal_get_cpu_id();
     new_entry->flags = 0;
-    
-    /* 复制数据区域 */
     new_entry->memory = entry->memory;
     new_entry->logical_core = entry->logical_core;
-    
-    /* 记录派生关系 */
+
     if (g_derivatives[cap].child_count < MAX_DERIVATIVES_PER_CAP) {
         g_derivatives[cap].children[g_derivatives[cap].child_count++] = new_cap;
     }
-    
-    atomic_exit_critical(irq);
-    
-    /* 为目标域生成句柄 */
+
     return cap_grant(to, new_cap, out);
 }
 
@@ -474,48 +448,30 @@ hic_status_t cap_derive(domain_id_t owner, cap_id_t parent, cap_rights_t sub_rig
     
     /* 检查权限单调性：派生权限必须是父权限的子集 */
     if ((sub_rights & ~g_global_cap_table[parent].rights) != 0) {
-        return HIC_ERROR_PERMISSION;  /* 派生权限超出父权限范围 */
+        return HIC_ERROR_PERMISSION;
     }
-    
-    /* 查找空闲能力槽 */
-    bool irq = atomic_enter_critical();
-    
-    cap_id_t cap = HIC_CAP_INVALID;
-    for (u32 i = 0; i < CAP_TABLE_SIZE; i++) {
-        if (g_global_cap_table[i].cap_id != i) {
-            cap = i;
-            break;
-        }
-    }
-    
+
+    cap_id_t cap = cap_core_first_free();
     if (cap == HIC_CAP_INVALID) {
-        atomic_exit_critical(irq);
         return HIC_ERROR_NO_MEMORY;
     }
-    
-    /* 初始化派生能力 */
+
     g_global_cap_table[cap].cap_id = cap;
     g_global_cap_table[cap].rights = sub_rights;
     g_global_cap_table[cap].owner = owner;
+    g_global_cap_table[cap].owner_core = (u8)hal_get_cpu_id();
     g_global_cap_table[cap].flags = 0;
-    
-    /* 复制父能力的完整数据（联合体的所有字段） */
     g_global_cap_table[cap].memory = g_global_cap_table[parent].memory;
     g_global_cap_table[cap].logical_core = g_global_cap_table[parent].logical_core;
-    
-    /* 策略单调性：派生能力的最大策略不能超过父能力 */
-    /* max_derived_policy 只能保持或衰减 */
-    u8 parent_max_policy = g_global_cap_table[parent].logical_core.max_derived_policy;
-    g_global_cap_table[cap].logical_core.max_derived_policy = parent_max_policy;
-    
-    /* 记录派生关系 */
+
+    u8 pmp = g_global_cap_table[parent].logical_core.max_derived_policy;
+    g_global_cap_table[cap].logical_core.max_derived_policy = pmp;
+
     if (g_derivatives[parent].child_count < MAX_DERIVATIVES_PER_CAP) {
         g_derivatives[parent].children[g_derivatives[parent].child_count++] = cap;
-        g_derivatives[cap].parent = parent;  /* 记录父能力 */
+        g_derivatives[cap].parent = parent;
     }
-    
-    atomic_exit_critical(irq);
-    
+
     *out = cap;
     return HIC_SUCCESS;
 }
@@ -829,22 +785,15 @@ hic_status_t cap_create_logical_core(domain_id_t owner,
         return HIC_ERROR_INVALID_PARAM;
     }
     
-    /* 查找空闲能力槽 */
-    cap_id_t cap = HIC_CAP_INVALID;
-    for (u32 i = 1; i < CAP_TABLE_SIZE && cap == HIC_CAP_INVALID; i++) {
-        if (g_global_cap_table[i].cap_id == 0) {
-            cap = i;
-        }
-    }
-    
+    cap_id_t cap = cap_core_first_free();
     if (cap == HIC_CAP_INVALID) {
         return HIC_ERROR_NO_RESOURCE;
     }
-    
-    /* 填充能力条目 */
+
     g_global_cap_table[cap].cap_id = cap;
     g_global_cap_table[cap].rights = rights;
     g_global_cap_table[cap].owner = owner;
+    g_global_cap_table[cap].owner_core = (u8)hal_get_cpu_id();
     g_global_cap_table[cap].flags = 0;
     
     /* 设置逻辑核心信息 */
@@ -1335,13 +1284,9 @@ hic_status_t cap_create_service_instance(domain_id_t owner,
     g_service_instances[idx].primary_cap = HIC_CAP_INVALID;
     g_service_instances[idx].standby_cap = HIC_CAP_INVALID;
     
-    /* 创建能力 */
-    cap_id_t cap = HIC_CAP_INVALID;
-    for (u32 i = 1; i < CAP_TABLE_SIZE && cap == HIC_CAP_INVALID; i++) {
-        if (g_global_cap_table[i].cap_id == 0) {
-            cap = i;
-        }
-    }
+    /* Per-core 分配 */
+    cpu_id_t svc_core = hal_get_cpu_id();
+    cap_id_t cap = cap_core_first_free();
     
     if (cap == HIC_CAP_INVALID) {
         g_service_instances[idx].name[0] = '\0';
@@ -1352,6 +1297,7 @@ hic_status_t cap_create_service_instance(domain_id_t owner,
     g_global_cap_table[cap].cap_id = cap;
     g_global_cap_table[cap].rights = CAP_LCORE_QUERY | flags;
     g_global_cap_table[cap].owner = owner;
+    g_global_cap_table[cap].owner_core = (u8)svc_core;
     g_global_cap_table[cap].flags = 0;
     
     *out = cap;
@@ -1528,27 +1474,17 @@ hic_status_t cnode_create(domain_id_t owner, u8 slot_bits, cap_id_t *out_cnode_c
     
     u16 slot_count = 1U << slot_bits;
     
+    cap_id_t cap = cap_core_first_free();
+    if (cap == HIC_CAP_INVALID) {
+        return HIC_ERROR_NO_RESOURCE;
+    }
+
     bool irq = atomic_enter_critical();
-    
-    /* 分配 CNode 内存 */
+
     cnode_t *cnode = cnode_alloc(slot_count);
     if (!cnode) {
         atomic_exit_critical(irq);
         return HIC_ERROR_NO_MEMORY;
-    }
-    
-    /* 在全局能力表中分配条目 */
-    cap_id_t cap = HIC_CAP_INVALID;
-    for (u32 i = 1; i < CAP_TABLE_SIZE && cap == HIC_CAP_INVALID; i++) {
-        if (g_global_cap_table[i].cap_id == 0) {
-            cap = i;
-        }
-    }
-    
-    if (cap == HIC_CAP_INVALID) {
-        cnode_free(cnode);
-        atomic_exit_critical(irq);
-        return HIC_ERROR_NO_RESOURCE;
     }
     
     /* 初始化 CNode */
@@ -1563,8 +1499,9 @@ hic_status_t cnode_create(domain_id_t owner, u8 slot_bits, cap_id_t *out_cnode_c
     
     /* 初始化能力表条目 */
     g_global_cap_table[cap].cap_id = cap;
-    g_global_cap_table[cap].rights = CAP_CNODE;  /* CNode 类型标志 */
+    g_global_cap_table[cap].rights = CAP_CNODE;
     g_global_cap_table[cap].owner = owner;
+    g_global_cap_table[cap].owner_core = (u8)hal_get_cpu_id();
     g_global_cap_table[cap].flags = 0;
     
     /* 存储指向 CNode 的指针 */

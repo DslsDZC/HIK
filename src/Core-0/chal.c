@@ -411,65 +411,6 @@ typedef struct {
 static chal_perf_counter_t g_perf_counters[32];
 
 /**
- * @brief 性能测量开始
- * 
- * @param counter_id 计数器ID
- */
-static inline void chal_perf_start(u32 counter_id)
-{
-    if (counter_id >= 32) {
-        return;
-    }
-    
-    chal_perf_counter_t* counter = &g_perf_counters[counter_id];
-    counter->start_time = chal_time_now();
-    counter->active = true;
-}
-
-/**
- * @brief 性能测量结束
- * 
- * @param counter_id 计数器ID
- */
-static inline void chal_perf_end(u32 counter_id)
-{
-    if (counter_id >= 32) {
-        return;
-    }
-    
-    chal_perf_counter_t* counter = &g_perf_counters[counter_id];
-    if (!counter->active) {
-        return;
-    }
-    
-    u64 end_time = chal_time_now();
-    u64 elapsed = 0;
-    
-    /* 计算经过的时间（转换为纳秒） */
-    if (end_time >= counter->start_time) {
-        u64 cycles = end_time - counter->start_time;
-        /* 从CPU信息获取频率（Hz），转换为纳秒 */
-        u64 cpu_freq_hz = g_cpu_info.clock_frequency;
-        if (cpu_freq_hz == 0) {
-            cpu_freq_hz = 2000000000ULL;  /* 默认2GHz */
-        }
-        elapsed = (cycles * 1000000000ULL) / cpu_freq_hz;  /* 转换为纳秒 */
-    }
-    
-    counter->total_calls++;
-    counter->total_time_ns += elapsed;
-    
-    if (elapsed > counter->max_time_ns) {
-        counter->max_time_ns = elapsed;
-    }
-    if (elapsed < counter->min_time_ns) {
-        counter->min_time_ns = elapsed;
-    }
-    
-    counter->active = false;
-}
-
-/**
  * @brief 重置性能计数器
  * 
  * @param counter_id 计数器ID

@@ -53,11 +53,6 @@ static inline u8 uart_read(phys_addr_t base, u16 offset)
     return hal_inb((u16)(base + offset));
 }
 
-static inline void uart_write(phys_addr_t base, u16 offset, u8 value)
-{
-    hal_outb((u16)(base + offset), value);
-}
-
 /* 计算波特率除数 */
 static u16 calculate_baud_divisor(u32 baud_rate)
 {

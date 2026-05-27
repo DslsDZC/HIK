@@ -35,6 +35,7 @@ void x86_64_restore_context(void *ctx);
 /**
  * 停止CPU（HLT指令）
  */
+void arch_halt(void) { __asm__ volatile("hlt"); }
 void x86_64_halt(void)
 {
     __asm__ volatile("hlt");

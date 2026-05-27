@@ -23,6 +23,7 @@
 #define HIC_KERNEL_CAPABILITY_H
 
 #include "types.h"
+#include "hal.h"
 #include <stdbool.h>
 
 /* 能力表大小 - 优化以减少内核BSS段大小 */
@@ -45,13 +46,19 @@
 /* 能力权限 */
 typedef u32 cap_rights_t;
 
+/* Per-core slot 分区：每个核独占一段 cap_id，无需全局锁 */
+#define CAP_SLOTS_PER_CORE   64
+#define CAP_MAX_CORES        (CAP_TABLE_SIZE / CAP_SLOTS_PER_CORE)
+/* 每个核的槽位范围: [core_id * CAP_SLOTS_PER_CORE, (core_id+1) * CAP_SLOTS_PER_CORE) */
+
 /* 全局能力表项（64字节，缓存行对齐） */
 typedef struct __attribute__((aligned(64))) cap_entry {
     cap_id_t       cap_id;       /* 能力ID */
     cap_rights_t   rights;       /* 权限 */
     domain_id_t    owner;        /* 拥有者 */
     u8             flags;        /* 标志 */
-    u8             reserved[7];  /* 对齐填充 */
+    u8             owner_core;   /* 归属核心（per-core slot 分区） */
+    u8             reserved[6];  /* 对齐填充 */
     
     union {
         struct {
@@ -180,6 +187,17 @@ static inline bool cap_fast_check_rights(cap_handle_t handle, cap_rights_t requi
            ((e->rights & required) == required);
 }
 
+/* Per-core 分配指针：每个核独立管理自己的 slot 段 */
+extern u32 g_cap_next_free[CAP_MAX_CORES];
+
+/* 获取当前核的 slot 段范围 */
+static inline cap_id_t cap_core_base(cpu_id_t core) {
+    return core * CAP_SLOTS_PER_CORE;
+}
+static inline cap_id_t cap_core_end(cpu_id_t core) {
+    return (core + 1) * CAP_SLOTS_PER_CORE;
+}
+
 /* 能力系统接口 */
 void capability_system_init(void);
 
@@ -195,8 +213,11 @@ hic_status_t cap_create_thread(domain_id_t owner, thread_id_t thread_id, cap_id_
 /* 能力授予（返回混淆句柄） */
 hic_status_t cap_grant(domain_id_t domain, cap_id_t cap, cap_handle_t *out);
 
-/* 能力撤销 */
+/* 能力撤销（仅 owner_core 可调用） */
 hic_status_t cap_revoke(cap_id_t cap);
+
+/* BSP 强制撤销（域回收用，可跨核操作） */
+hic_status_t cap_force_revoke(cap_id_t cap);
 
 /* 能力传递（创建新句柄） */
 hic_status_t cap_transfer(domain_id_t from, domain_id_t to, cap_id_t cap, cap_handle_t *out);

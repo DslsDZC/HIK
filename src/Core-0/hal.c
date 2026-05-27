@@ -23,9 +23,9 @@
 static hal_arch_type_t g_current_arch = HAL_ARCH_UNKNOWN;
 static const hal_arch_ops_t *g_arch_ops = NULL;
 
-/* 默认串口配置 */
+/* 默认串口配置（由 arch 的 arch_uart_get_default_base 确定） */
 static hal_uart_config_t g_uart_config = {
-    .base_addr = 0x3F8,
+    .base_addr = 0,
     .baud_rate = 115200,
     .data_bits = 8,
     .parity = 0,
@@ -352,11 +352,15 @@ void hal_uart_init(const hal_uart_config_t *config)
         g_uart_config.base_addr = arch_uart_get_default_base();
         g_uart_config.baud_rate = 115200;
     }
+    if (g_uart_config.base_addr == 0)
+        g_uart_config.base_addr = arch_uart_get_default_base();
     arch_uart_init(g_uart_config.base_addr, g_uart_config.baud_rate);
 }
 
 void hal_uart_putc(char c)
 {
+    if (g_uart_config.base_addr == 0)
+        g_uart_config.base_addr = arch_uart_get_default_base();
     arch_uart_putc(g_uart_config.base_addr, c);
 }
 

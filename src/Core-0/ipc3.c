@@ -223,6 +223,15 @@ hic_status_t ipc3_register_service(domain_id_t owner,
         return status;
     }
 
+    /* Map entry page into owner domain's page table */
+    if (owner != HIC_DOMAIN_CORE) {
+        page_table_t *owner_pt = domain_switch_get_pagetable(owner);
+        if (owner_pt) {
+            pagetable_map(owner_pt, entry_phys, entry_phys,
+                          IPC3_PAGE_SIZE, PERM_RX, MAP_TYPE_IDENTITY);
+        }
+    }
+
     /* Fill in service descriptor */
     svc->entry_page_phys = entry_phys;
     svc->entry_page_virt = entry_phys;  /* identity-mapped */
@@ -312,6 +321,15 @@ hic_status_t ipc3_authorize(ipc3_service_id_t service_id, domain_id_t domain)
 
     /* Also update the local copy */
     svc->bitmap.bits[byte_idx] |= (1U << bit_idx);
+
+    /* Map entry page into the domain's page table so it can call us */
+    if (domain != HIC_DOMAIN_CORE) {
+        page_table_t *pt = domain_switch_get_pagetable(domain);
+        if (pt) {
+            pagetable_map(pt, svc->entry_page_virt, svc->entry_page_phys,
+                          IPC3_PAGE_SIZE, PERM_RX, MAP_TYPE_IDENTITY);
+        }
+    }
 
     atomic_exit_critical(irq_state);
 

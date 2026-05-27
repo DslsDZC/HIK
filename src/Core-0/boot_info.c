@@ -23,6 +23,7 @@
 #include "hardware_probe.h"
 #include "audit.h"
 #include "hal.h"
+#include "lib/mem.h"
 
 #include <stdarg.h>
 #include <stddef.h>
@@ -100,31 +101,106 @@ void boot_info_copy_to_static(void)
     }
 }
 
-/* ==================== 辅助函数 ==================== */
+/* ==================== TLV 解析 ==================== */
 
-/* 简化的 sscanf 实现 */
-static int simple_sscanf(const char *str, const char *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    
-    if (strcmp(fmt, "%lu%c") == 0) {
-        unsigned long *val = va_arg(args, unsigned long*);
-        char *ch = va_arg(args, char*);
+static hic_mem_entry_t g_mem_map_storage[64];
 
-        const char *p = str;
-        *val = 0;
-        while (*p >= '0' && *p <= '9') {
-            *val = *val * 10 + (u64)(*p - '0');
-            p++;
+void boot_info_parse_tlv(void)
+{
+    volatile boot_info_header_t *hdr = (boot_info_header_t *)BOOT_INFO_ADDR;
+    if (hdr->magic != BOOT_INFO_MAGIC) return;
+
+    memzero(&g_boot_info_storage, sizeof(g_boot_info_storage));
+    g_boot_info_storage.magic = HIC_BOOT_INFO_MAGIC;
+    g_boot_info_storage.version = HIC_BOOT_INFO_VERSION;
+
+    u8 *pos = (u8 *)(hdr + 1);
+    u8 *end = (u8 *)hdr + hdr->total_size;
+
+    for (u32 i = 0; i < hdr->entry_count && pos < end; i++) {
+        boot_info_tlv_t *tlv = (boot_info_tlv_t *)pos;
+        if (tlv->tag == TAG_END) break;
+        if (pos + sizeof(boot_info_tlv_t) + tlv->len > end) break;
+
+        switch (tlv->tag) {
+        case TAG_MEM_MAP:;
+            u32 mc = tlv->len / sizeof(hic_mem_entry_t);
+            if (mc > 64) mc = 64;
+            memcpy(g_mem_map_storage, tlv->data, mc * sizeof(hic_mem_entry_t));
+            g_boot_info_storage.mem_map = g_mem_map_storage;
+            g_boot_info_storage.mem_map_entry_count = mc;
+            break;
+        case TAG_CPU_COUNT:
+            if (tlv->len >= 4)
+                g_boot_info_storage.system.cpu_count = *(u32 *)tlv->data;
+            break;
+        case TAG_CMDLINE:
+            if (tlv->len > 0) {
+                u32 cl = tlv->len < 255 ? tlv->len : 255;
+                memcpy(g_boot_info_storage.cmdline, tlv->data, cl);
+                g_boot_info_storage.cmdline[cl] = 0;
+            }
+            break;
+        case TAG_RSDP:
+            if (tlv->len >= 8) {
+                g_boot_info_storage.rsdp = *(void **)tlv->data;
+                g_boot_info_storage.flags |= HIC_BOOT_FLAG_ACPI_ENABLED;
+            }
+            break;
+        case TAG_FRAMEBUFFER:
+            if (tlv->len >= sizeof(g_boot_info_storage.video))
+                memcpy(&g_boot_info_storage.video, tlv->data, sizeof(g_boot_info_storage.video));
+            break;
+        case TAG_SERIAL_PORT:
+            if (tlv->len >= 2)
+                g_boot_info_storage.debug.serial_port = *(u16 *)tlv->data;
+            break;
+        case TAG_KERNEL_BASE:
+            if (tlv->len >= 8)
+                g_boot_info_storage.kernel_base = *(void **)tlv->data;
+            break;
+        case TAG_KERNEL_SIZE:
+            if (tlv->len >= 8)
+                g_boot_info_storage.kernel_size = *(u64 *)tlv->data;
+            break;
+        case TAG_ENTRY_POINT:
+            if (tlv->len >= 8)
+                g_boot_info_storage.entry_point = *(u64 *)tlv->data;
+            break;
+        case TAG_STACK_TOP:
+            if (tlv->len >= 8)
+                g_boot_info_storage.stack_top = *(u64 *)tlv->data;
+            break;
+        case TAG_GDT:
+            if (tlv->len >= sizeof(g_boot_info_storage.gdt))
+                memcpy(&g_boot_info_storage.gdt, tlv->data, sizeof(g_boot_info_storage.gdt));
+            break;
+        case TAG_ARCH:
+            if (tlv->len >= 4)
+                g_boot_info_storage.system.architecture = *(u32 *)tlv->data;
+            break;
+        case TAG_DISK_INFO:
+            if (tlv->len >= sizeof(g_boot_info_storage.disk))
+                memcpy(&g_boot_info_storage.disk, tlv->data, sizeof(g_boot_info_storage.disk));
+            break;
+        case TAG_HARDWARE_DATA:
+            g_boot_info_storage.hardware.hw_data = tlv->data;
+            g_boot_info_storage.hardware.hw_size = tlv->len;
+            break;
+        case TAG_MODULE: {
+            u32 modc = tlv->len / sizeof(g_boot_info_storage.modules[0]);
+            if (modc > 16) modc = 16;
+            memcpy(g_boot_info_storage.modules, tlv->data, modc * sizeof(g_boot_info_storage.modules[0]));
+            g_boot_info_storage.module_count = modc;
+            break;
         }
-        if (ch) *ch = *p;
-        
-        va_end(args);
-        return 2;
+        }
+        pos += sizeof(boot_info_tlv_t) + tlv->len;
     }
-    
-    va_end(args);
-    return 0;
+
+    g_boot_info_storage.firmware_type = 0;
+    g_boot_info = &g_boot_info_storage;
+    g_boot_state.boot_info = &g_boot_info_storage;
 }
 
 /* ==================== 验证接口 ==================== */
@@ -328,155 +404,6 @@ void boot_info_init_memory(hic_boot_info_t* boot_info) {
     console_puts("\n");
     
     pmm_mark_used(kernel_start, kernel_end - kernel_start);
-}
-
-/* ==================== ACPI 接口 ==================== */
-
-/**
- * 初始化 ACPI
- */
-void boot_info_init_acpi(hic_boot_info_t* boot_info) {
-    if (!boot_info || !boot_info->rsdp) {
-        console_puts("[BOOT] No ACPI RSDP available\n");
-        return;
-    }
-    
-    acpi_rsdp_t* rsdp = (acpi_rsdp_t*)boot_info->rsdp;
-    
-    /* 验证 RSDP 签名 */
-    if (memcmp(rsdp->signature, "RSD PTR ", 8) != 0) {
-        console_puts("[BOOT] Invalid RSDP signature\n");
-        return;
-    }
-    
-    console_puts("[BOOT] ACPI RSDP found at 0x");
-    console_puthex64((u64)rsdp);
-    console_puts(", revision ");
-    console_putu32(rsdp->revision);
-    console_puts("\n");
-    
-    /* 解析 RSDT/XSDT */
-    if (rsdp->revision == 0) {
-        acpi_rsdt_t* rsdt = (acpi_rsdt_t*)(hal_phys_to_virt(rsdp->rsdt_address));
-        boot_info_parse_acpi_tables(rsdt, ACPI_SIG_RSDT);
-    } else {
-        acpi_xsdt_t* xsdt = (acpi_xsdt_t*)(hal_phys_to_virt(rsdp->xsdt_address));
-        boot_info_parse_acpi_tables(xsdt, ACPI_SIG_XSDT);
-    }
-}
-
-/**
- * 解析 ACPI 表
- */
-void boot_info_parse_acpi_tables(void *sdt, const char *signature) {
-    if (!sdt || !signature) {
-        return;
-    }
-    
-    acpi_sdt_header_t *header = (acpi_sdt_header_t *)sdt;
-    
-    if (memcmp(header->signature, signature, 4) != 0) {
-        console_puts("[BOOT] ACPI table signature mismatch\n");
-        return;
-    }
-    
-    console_puts("[BOOT] ACPI table ");
-    console_puts(signature);
-    console_puts(": length=");
-    console_putu32(header->length);
-    console_puts("\n");
-    
-    u32 entry_count = 0;
-    u32 entry_size = 0;
-    
-    /* 根据表类型确定条目大小 */
-    if (memcmp(signature, ACPI_SIG_RSDT, 4) == 0) {
-        entry_size = 4;  /* RSDT条目为32位指针 */
-    } else if (memcmp(signature, ACPI_SIG_XSDT, 4) == 0) {
-        entry_size = 8;  /* XSDT条目为64位指针 */
-    }
-    
-    /* 计算条目数量 */
-    if (entry_size > 0) {
-        entry_count = (u32)((header->length - sizeof(acpi_sdt_header_t)) / entry_size);
-    }
-    
-    console_puts("[BOOT] Found ");
-    console_putu32(entry_count);
-    console_puts(" ACPI tables\n");
-    
-    /* 遍历并解析子表 */
-    for (u32 i = 0; i < entry_count; i++) {
-        acpi_sdt_header_t *sub_table = NULL;
-        
-        if (entry_size == 4) {
-            u32 *entries = (u32 *)((u8 *)sdt + sizeof(acpi_sdt_header_t));
-            sub_table = (acpi_sdt_header_t *)hal_phys_to_virt(entries[i]);
-        } else {
-            u64 *entries = (u64 *)((u8 *)sdt + sizeof(acpi_sdt_header_t));
-            sub_table = (acpi_sdt_header_t *)hal_phys_to_virt(entries[i]);
-        }
-        
-        if (!sub_table) continue;
-        
-        /* 解析已知的ACPI表 */
-        if (memcmp(sub_table->signature, "APIC", 4) == 0) {
-            /* MADT - 多APIC描述表 */
-            console_puts("[BOOT]  Found MADT (APIC) table\n");
-            /* 解析MADT获取CPU和IO-APIC信息 */
-            extern cpu_info_t g_cpu_info;
-            u8 *madt_entries = (u8 *)sub_table + sizeof(acpi_sdt_header_t) + 8;
-            u8 *madt_end = (u8 *)sub_table + sub_table->length;
-            
-            while (madt_entries < madt_end) {
-                u8 type = madt_entries[0];
-                u8 len = madt_entries[1];
-                
-                if (len == 0) break;
-                
-                if (type == 0) {
-                    /* 处理器本地APIC */
-                    g_cpu_info.logical_cores++;
-                    console_puts("[BOOT]   CPU core detected (total: ");
-                    console_putu32(g_cpu_info.logical_cores);
-                    console_puts(")\n");
-                } else if (type == 1) {
-                    /* I/O APIC */
-                    console_puts("[BOOT]   I/O APIC found\n");
-                } else if (type == 2) {
-                    /* 中断源覆盖 */
-                    console_puts("[BOOT]   Interrupt source override\n");
-                }
-                
-                madt_entries += len;
-            }
-        }
-        else if (memcmp(sub_table->signature, "MCFG", 4) == 0) {
-            /* MCFG - PCIe配置空间 */
-            console_puts("[BOOT]  Found MCFG (PCIe config) table\n");
-        }
-        else if (memcmp(sub_table->signature, "HPET", 4) == 0) {
-            /* HPET - 高精度事件定时器 */
-            console_puts("[BOOT]  Found HPET table\n");
-        }
-        else if (memcmp(sub_table->signature, "FACP", 4) == 0) {
-            /* FADT - 固定ACPI描述表 */
-            console_puts("[BOOT]  Found FADT (FACP) table\n");
-        }
-        else if (memcmp(sub_table->signature, "DSDT", 4) == 0 ||
-                 memcmp(sub_table->signature, "SSDT", 4) == 0) {
-            /* DSDT/SSDT - 不同系统描述表 */
-            console_puts("[BOOT]  Found ");
-            console_puts(sub_table->signature);
-            console_puts(" (ACPI definition block)\n");
-        }
-        else {
-            /* 未知的表类型 */
-            console_puts("[BOOT]  Found unknown table: ");
-            console_puts(sub_table->signature);
-            console_puts("\n");
-        }
-    }
 }
 
 /* ==================== 命令行解析 ==================== */

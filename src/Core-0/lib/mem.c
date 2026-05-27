@@ -9,6 +9,7 @@
  */
 
 #include "mem.h"
+#include "hal.h"
 
 /* 内存填充为零 */
 void *memzero(void *ptr, size_t len)
@@ -117,6 +118,6 @@ void __stack_chk_fail(void)
 {
     /* 简单的死循环 - 实际实现应该记录日志并终止进程 */
     while (1) {
-        __asm__ volatile ("hlt");
+        halt_cpu();
     }
 }

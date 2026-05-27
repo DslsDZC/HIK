@@ -38,42 +38,26 @@ static void thread_exit_handler(void);
  *   [callee-saved 空间]  <- RSP 指向这里
  *   entry_point          <- 栈顶（将被弹出）
  */
+#ifdef __x86_64__
 __attribute__((naked)) static void thread_entry_wrapper(void)
 {
-    /*
-     * 这个函数使用 naked 属性，不生成任何函数序言/尾声代码。
-     * 
-     * 进入时：
-     * - RSP 指向 callee-saved 空间的末尾
-     * - 栈顶（RSP 指向的位置）是入口点地址
-     * - 其下方是 thread_exit_handler 地址
-     * 
-     * 我们需要：
-     * 1. 弹出入口点地址到 RAX
-     * 2. 调用入口函数（使用 call，这样返回地址会被压栈）
-     * 3. 入口函数返回后，跳转到 thread_exit_handler
-     */
     __asm__ volatile (
-        /* 弹出入口点地址 */
-        "popq %%rax\n\t"          /* RAX = entry_point */
-        /* 调用入口函数 */
-        "call *%%rax\n\t"         /* 调用 entry_point() */
-        /* 入口函数返回，跳转到退出处理 */
-        "movq %0, %%rax\n\t"      /* 将退出处理函数地址加载到 RAX */
-        "jmp *%%rax\n\t"          /* 跳转到 thread_exit_handler */
+        "popq %%rax\n\t"
+        "call *%%rax\n\t"
+        "movq %0, %%rax\n\t"
+        "jmp *%%rax\n\t"
         :
         : "r" (thread_exit_handler)
         : "memory", "rax"
     );
 }
+#endif
 
 /* 线程退出处理函数 - 当线程入口函数返回时调用 */
 static void thread_exit_handler(void)
 {
     /* 使用串口输出调试信息 */
-    extern void serial_print(const char*);
-    extern thread_t idle_thread;
-    serial_print("[THREAD_EXIT] Thread completed, calling schedule()\n");
+    console_puts("[THREAD_EXIT] Thread completed, calling schedule()\n");
 
     /* 保存g_current_thread指针，因为schedule()会修改它 */
     thread_t *exiting_thread = g_current_thread;
@@ -87,9 +71,9 @@ static void thread_exit_handler(void)
     schedule();
 
     /* 不应该到达这里 */
-    serial_print("[THREAD_EXIT] ERROR: Returned from schedule()!\n");
+    console_puts("[THREAD_EXIT] ERROR: Returned from schedule()!\n");
     while (1) {
-        __asm__ volatile("hlt");
+        halt_cpu();
     }
 }
 

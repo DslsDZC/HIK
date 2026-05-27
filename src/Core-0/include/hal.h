@@ -23,6 +23,9 @@
 #include "../types.h"
 #include <stdbool.h>
 
+void arch_halt(void);
+#define halt_cpu() arch_halt()
+
 /* 架构类型枚举 */
 typedef enum {
     HAL_ARCH_UNKNOWN = 0,

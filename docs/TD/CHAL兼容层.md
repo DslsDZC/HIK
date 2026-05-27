@@ -8,12 +8,6 @@ SPDX-License-Identifier: CC-BY-4.0
 
 本文档详细说明了HIC系统的CHAL (Compatibility Hardware Abstraction Layer) 兼容性硬件抽象层。
 
-## 版本信息
-
-- **文档版本**: 1.0.0
-- **最后更新**: 2026-02-26
-- **适用内核版本**: HIC Core-0 v1.0+
-
 ---
 
 ## 一、CHAL概述

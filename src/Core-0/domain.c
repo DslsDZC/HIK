@@ -20,7 +20,7 @@
 #include "atomic.h"
 #include "lib/mem.h"
 #include "hal.h"
-#include "hal_cr3.h"
+#include "pagetable.h"
 #include "ipc3.h"
 #include "thread.h"  /* 用于域切换时的线程状态管理 */
 
@@ -189,7 +189,7 @@ hic_status_t domain_create(domain_type_t type, domain_id_t parent,
         console_puts("[Domain] Core-0 domain uses kernel page table\n");
 
         /* 注册 Core-0 页表到 domain_switch 子系统 */
-        pagetable_setup_domain(HIC_DOMAIN_CORE, (page_table_t*)hal_get_cr3());
+        pagetable_setup_domain(HIC_DOMAIN_CORE, pagetable_get_current());
     } else {
         /* 其他域创建独立页表 */
         page_table_t *domain_pagetable = pagetable_create();

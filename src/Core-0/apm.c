@@ -556,9 +556,9 @@ hic_status_t apm_init_all_uarts(void)
         uart_cfg.parity = config->parity;
         uart_cfg.stop_bits = config->stop_bits;
         
-        /* 串口初始化 - 调用minimal_uart初始化 */
-        extern void minimal_uart_init_from_apm(struct uart_config_for_minimal *cfg);
-        minimal_uart_init_from_apm(&uart_cfg);
+        /* 串口初始化 - weak符号，未实现时跳过 */
+        __attribute__((weak)) extern void minimal_uart_init_from_apm(struct uart_config_for_minimal *cfg);
+        if (minimal_uart_init_from_apm) minimal_uart_init_from_apm(&uart_cfg);
         console_puts("[APM] UART ");
         console_putu32(i);
         console_puts(" initialized at 0x");

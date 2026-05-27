@@ -1581,135 +1581,80 @@ EFI_STATUS exit_boot_services(__attribute__((unused)) hic_boot_info_t *boot_info
  * - 记录详细的跳转信息
  */
 __attribute__((noreturn))
+static void write_tlv(hic_boot_info_t *bi)
+{
+    boot_info_header_t *hdr = (boot_info_header_t *)BOOT_INFO_ADDR;
+    uint8_t *pos = (uint8_t *)(hdr + 1);
+    uint32_t count = 0;
+
+    if (bi->mem_map && bi->mem_map_entry_count > 0) {
+        pos = tlv_put(pos, TAG_MEM_MAP, bi->mem_map,
+                       bi->mem_map_entry_count * sizeof(memory_map_entry_t));
+        count++;
+    }
+    pos = tlv_put(pos, TAG_CPU_COUNT, &bi->system.cpu_count, 4); count++;
+    if (bi->rsdp) {
+        pos = tlv_put(pos, TAG_RSDP, &bi->rsdp, 8); count++;
+    }
+    if (bi->kernel_base)
+        pos = tlv_put(pos, TAG_KERNEL_BASE, &bi->kernel_base, 8); count++;
+    pos = tlv_put(pos, TAG_KERNEL_SIZE, &bi->kernel_size, 8); count++;
+    pos = tlv_put(pos, TAG_ENTRY_POINT, &bi->entry_point, 8); count++;
+    if (bi->stack_top)
+        pos = tlv_put(pos, TAG_STACK_TOP, &bi->stack_top, 8); count++;
+    if (bi->cmdline[0])
+        pos = tlv_put(pos, TAG_CMDLINE, bi->cmdline, 64); count++;
+    pos = tlv_put(pos, TAG_ARCH, &bi->system.architecture, 4); count++;
+
+    if (bi->debug.serial_port)
+        pos = tlv_put(pos, TAG_SERIAL_PORT, &bi->debug.serial_port, 2); count++;
+    if (bi->video.framebuffer_base)
+        pos = tlv_put(pos, TAG_FRAMEBUFFER, &bi->video, sizeof(bi->video)); count++;
+    if (bi->disk.disk_base)
+        pos = tlv_put(pos, TAG_DISK_INFO, &bi->disk, sizeof(bi->disk)); count++;
+
+    pos = tlv_put(pos, TAG_GDT, &bi->gdt, sizeof(bi->gdt)); count++;
+
+    if (bi->hardware.hw_data && bi->hardware.hw_size > 0)
+        pos = tlv_put(pos, TAG_HARDWARE_DATA, bi->hardware.hw_data, bi->hardware.hw_size); count++;
+
+    if (bi->module_count > 0) {
+        pos = tlv_put(pos, TAG_MODULE, bi->modules,
+                       bi->module_count * sizeof(bi->modules[0])); count++;
+    }
+
+    hdr->magic = BOOT_INFO_MAGIC;
+    hdr->total_size = (uint32_t)((uint8_t *)pos - (uint8_t *)hdr);
+    hdr->version = 1;
+    hdr->flags = 0;
+    hdr->entry_count = count;
+
+    console_puts("[TLV] Wrote boot info to 0x1000\n");
+}
+
 void jump_to_kernel(hic_boot_info_t *boot_info) {
-    // 【安全检查1】验证boot_info指针
-    if (boot_info == NULL) {
-        console_puts("[JUMP] ERROR: boot_info is NULL!\n");
-        while (1) {
-            __asm__ volatile ("hlt");
-        }
+    if (!boot_info || !boot_info->entry_point) {
+        console_puts("[JUMP] ERROR: invalid boot_info\n");
+        while (1) __asm__ volatile ("hlt");
     }
-    
-    // 【安全检查2】验证入口点
-    if (boot_info->entry_point == 0) {
-        console_puts("[JUMP] ERROR: entry_point is 0!\n");
-        while (1) {
-            __asm__ volatile ("hlt");
-        }
-    }
-    
-    // 【安全检查3】验证栈指针
-    if (boot_info->stack_top == 0) {
-        console_puts("[JUMP] ERROR: stack_top is 0!\n");
-        while (1) {
-            __asm__ volatile ("hlt");
-        }
-    }
-    
-    // 添加调试信息
-    char temp_str[256];
-    snprintf(temp_str, sizeof(temp_str), "[JUMP] boot_info=%p, entry_point=%p (0x%lx), stack_top=%p\n",
-             boot_info, (void*)boot_info->entry_point, boot_info->entry_point, (void*)boot_info->stack_top);
-    console_puts(temp_str);
-    
-    // 验证入口点地址范围（应该在0x100000左右）
-    if (boot_info->entry_point < 0x100000 || boot_info->entry_point > 0x200000) {
-        snprintf(temp_str, sizeof(temp_str), "[JUMP] WARNING: entry_point 0x%lx seems unusual\n", boot_info->entry_point);
-        console_puts(temp_str);
-    }
-    
-    // 直接跳转到内核入口点，不使用函数调用
-    void *kernel_entry = (void *)boot_info->entry_point;
-    void *stack_top = (void *)boot_info->stack_top;
-    
-    // 验证指针不为NULL
-    if (kernel_entry == NULL) {
-        console_puts("[JUMP] ERROR: kernel_entry is NULL!\n");
-        while (1) {
-            __asm__ volatile ("hlt");
-        }
-    }
-    
-    if (stack_top == NULL) {
-        console_puts("[JUMP] ERROR: stack_top is NULL!\n");
-        while (1) {
-            __asm__ volatile ("hlt");
-        }
-    }
-    
-    console_puts("[JUMP] All checks passed, jumping to kernel...\n");
 
-    // 调试：输出字符 X，表示准备跳转
-    console_puts("X");
+    /* 将引导信息以 TLV 格式写入 0x1000 */
+    write_tlv(boot_info);
 
-    // 调试：输出跳转地址
-    char jump_str[128];
-    snprintf(jump_str, sizeof(jump_str), "[JUMP] kernel_entry=0x%lx\n", (uint64_t)kernel_entry);
-    console_puts(jump_str);
-
-    // 禁用中断
+    console_puts("[JUMP] Jumping to kernel...\n");
     __asm__ volatile ("cli");
 
-    // 设置栈指针，确保16字节对齐
-    uint64_t aligned_stack = ((uint64_t)stack_top) & 0xFFFFFFFFFFFFFFF0ULL;  // 对齐到16字节
+    void *entry = (void *)boot_info->entry_point;
+    __asm__ volatile (
+        "mov %0, %%rsp\n"
+        "xor %%rdi, %%rdi\n"
+        "jmp *%1\n"
+        :
+        : "r"((uint64_t)boot_info->stack_top & ~0xFULL), "r"(entry)
+        : "rdi"
+    );
 
-    // 根据文档设计（docs/TD/可移植性.md 第6.1.1节）：
-    // - 静态中断路由表：构建时确定，运行时零查找
-    // - 直接分发：硬件直接跳转到处理函数入口
-    // - Core-0仅在异常时介入
-    //
-    // 根据文档设计（docs/TD/3层模型.md 第2.1节）：
-    // - Core-0运行在最高特权模式（x86 Ring 0）
-    // - 特权内存访问通道：Core-0和Privileged-1共享Ring 0
-    
-    // 使用boot_info中预先初始化的GDT，确保内核运行在Ring 0
-    console_puts("[JUMP] Loading GDT from boot_info...\n");
-    console_printf("[JUMP] GDT address: 0x%lx\n", (uint64_t)(&boot_info->gdt.gdt));
-    console_printf("[JUMP] GDT base: 0x%lx, limit: 0x%x\n", boot_info->gdt.gdt_base, boot_info->gdt.gdt_limit);
-    
-    // 构造lgdt指令需要的10字节GDT指针
-    struct {
-        uint16_t limit;
-        uint64_t base;
-    } __attribute__((packed)) gdt_ptr_struct;
-    
-    gdt_ptr_struct.limit = boot_info->gdt.gdt_limit;
-    gdt_ptr_struct.base = boot_info->gdt.gdt_base;
-    
-    __asm__ volatile (
-        // 加载GDT
-        "lgdt %0\n"
-        :
-        : "m"(gdt_ptr_struct)
-        : "memory"
-    );
-    
-    // 直接跳转到内核（使用当前CS，不使用远跳转）
-    console_puts("[JUMP] Jumping to kernel (using current CS)...\n");
-    
-    __asm__ volatile (
-        // 设置栈指针
-        "mov %0, %%rsp\n"      // 设置栈指针
-        // 设置第一个参数
-        "mov %2, %%rdi\n"      // 设置RDI为boot_info
-        // 调试：NOP指令
-        "nop\n"                // 调试：NOP指令
-        "nop\n"                // 调试：NOP指令
-        "nop\n"                // 调试：NOP指令
-        // 直接跳转到内核（不改变CS）
-        "jmp *%1\n"           // 间接跳转，不改变CS
-        :
-        : "r"(aligned_stack), "r"(kernel_entry), "r"(boot_info)
-        : "memory", "rdi"
-    );
-    
-    // 永远不会到达这里
-    console_puts("[JUMP] ERROR: Returned from far jump!\n");
-    
-    // 永远不会到达这里
-    while (1) {
-        __asm__ volatile ("hlt");
-    }
+    while (1) __asm__ volatile ("hlt");
 }
 
 /**

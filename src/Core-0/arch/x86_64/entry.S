@@ -5,27 +5,22 @@
  */
 
 # HIC内核入口点（x86_64）
-# Bootloader跳转到这个入口点
+# Bootloader 将 TLV 写入 0x1000 后跳转至此。
 
 .section .text.start
 .global _start
 .global kernel_entry
 
 .extern kernel_start
+.extern __stack_end
 
-/* boot_info 结构体偏移常量 */
-.set BOOT_INFO_OFFSET_STACK_TOP, 0x978
+# 串口寄存器常量
+.set UART_LSR, 0x3FD
+.set UART_THR, 0x3F8
+.set UART_THRE, 0x20
 
-/* UART 寄存器常量 */
-.set UART_LSR, 0x3FD        /* 线路状态寄存器 */
-.set UART_THR, 0x3F8        /* 发送保持寄存器 */
-.set UART_THRE, 0x20        /* 发送保持寄存器空标志 */
-
-# 内核入口点
-# 参数: %rdi = hic_boot_info_t* boot_info
 _start:
 kernel_entry:
-    # 保存调用者上下文（在串口输出之前）
     push %rbx
     push %rbp
     push %r12
@@ -33,57 +28,33 @@ kernel_entry:
     push %r14
     push %r15
 
-    # 保存boot_info指针
-    mov %rdi, %r15
-
-    # 输出调试信息：'K' 表示内核入口
+    # 串口输出 'K' 表示内核入口
     mov $'K', %al
     call .serial_putchar
-    
-    # 输出调试信息：'1' 表示检查boot_info指针
+
+    # 输出 '1'、'2' 调试标记
     mov $'1', %al
     call .serial_putchar
-    
-    # 检查boot_info指针是否为0
-    test %r15, %r15
-    jnz .boot_info_valid
-    
-    # boot_info指针为0，输出'E'表示错误
-    mov $'E', %al
-    call .serial_putchar
-    jmp .kernel_panic_loop
 
-.boot_info_valid:
-    # 输出调试信息：'2' 表示加载GDT
+    # 加载 GDT
     mov $'2', %al
     call .serial_putchar
-    
-    # 加载 GDT
     lgdt gdt_ptr
-    
-    # 输出调试信息：'3' 表示设置栈指针
+
+    # 使用内核内置栈（链接脚本 .stack 段）
     mov $'3', %al
     call .serial_putchar
-    
-    # 重新设置栈指针（使用boot_info中的栈）
-    mov %r15, %rdi
-    mov BOOT_INFO_OFFSET_STACK_TOP(%rdi), %rsp
-    
-    # 栈指针对齐（16字节对齐，符合x86-64 ABI）
+    lea __stack_end(%rip), %rsp
     and $~0xF, %rsp
-    
-    # 输出调试信息：'4' 表示跳转到kernel_start
+
+    # 跳转到 C 入口
     mov $'4', %al
     call .serial_putchar
-    
-    # 调用C语言内核入口点
-    mov %r15, %rdi        # boot_info作为第一个参数
     call kernel_start
-    
-    # 如果kernel_start返回，输出错误信息并停止
-    cli                   # 禁用中断
+
+    cli
 .kernel_panic_loop:
-    hlt                   # 停止CPU
+    hlt
     jmp .kernel_panic_loop
 
 # 串口输出字符函数（内联）

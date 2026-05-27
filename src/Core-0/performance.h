@@ -52,17 +52,6 @@ static inline u64 fast_syscall_entry(u64 num, u64 arg1, u64 arg2, u64 arg3) {
 /* 使用快速上下文切换指令 */
 #endif
 
-/* 4. 缓存优化 */
-#define CACHE_LINE_SIZE 64
-#define __align_cache __attribute__((aligned(CACHE_LINE_SIZE)))
-
-/* 5. 分支预测优化 */
-#define likely(x)   __builtin_expect(!!(x), 1)
-#define unlikely(x) __builtin_expect(!!(x), 0)
-
-/* 6. 内联关键函数 */
-#define FORCE_INLINE __attribute__((always_inline)) static inline
-
 /* 性能计数器 */
 typedef struct {
     u64 syscall_count;
