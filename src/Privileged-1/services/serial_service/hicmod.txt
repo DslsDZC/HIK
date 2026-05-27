@@ -1,0 +1,46 @@
+# HIC服务模块元数据文件
+
+[service]
+name = serial_service
+display_name = 串口服务
+version = 1.0.0
+api_version = 1.0
+uuid = 1a2b3c4d-5e6f-7890-abcd-ef1234567890
+
+[author]
+name = DslsDZC
+email = dsls.dzc@gmail.com
+license = GPL-2.0-only WITH LicenseRef-HIC-service-exception
+
+[description]
+short = 提供串口通信服务
+long = 串口服务提供基于x86架构的串口输入输出功能，支持波特率配置和缓冲区管理。用于内核调试和系统日志输出。
+
+[dependencies]
+core_api = 1.0:1.0:2.0
+libc_service = 1.0:1.0:1.0
+
+[resources]
+max_memory = 16384
+max_threads = 1
+max_capabilities = 16
+cpu_quota_percent = 3
+
+[endpoints]
+serial_putchar = 1.0:serial_putchar
+serial_puts = 1.0:serial_puts
+serial_getchar = 1.0:serial_getchar
+
+[permissions]
+domain_create = false
+capability_create = false
+
+[security]
+critical = true
+privileged = true
+signature_required = false
+
+[build]
+static = false
+priority = 3
+autostart = true

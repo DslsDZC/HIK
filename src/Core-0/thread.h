@@ -1,0 +1,154 @@
+/*
+ * SPDX-FileCopyrightText: 2026 DslsDZC <dsls.dzc@gmail.com>
+ *
+ * SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-HIC-service-exception
+ */
+
+/**
+ * HIC线程管理头文件
+ * 遵循三层模型文档第2.1节：执行控制与调度
+ */
+
+#ifndef HIC_KERNEL_THREAD_H
+#define HIC_KERNEL_THREAD_H
+
+#include "types.h"
+#include "domain.h"
+#include "hal.h"
+
+/* 前向声明 */
+typedef struct thread thread_t;
+
+/* NULL 定义 */
+#ifndef NULL
+#define NULL ((void*)0)
+#endif
+
+/* 线程状态 */
+typedef enum {
+    THREAD_STATE_READY,       /* 就绪 */
+    THREAD_STATE_RUNNING,     /* 运行中 */
+    THREAD_STATE_BLOCKED,     /* 阻塞 */
+    THREAD_STATE_WAITING,     /* 等待 */
+    THREAD_STATE_TERMINATED,  /* 已终止 */
+} thread_state_t;
+
+/* 线程控制块 */
+struct thread {
+    thread_id_t    thread_id;     /* 线程ID */
+    domain_id_t    domain_id;     /* 所属域 */
+    thread_state_t state;         /* 线程状态 */
+    priority_t     priority;      /* 优先级 */
+    
+    /* 逻辑核心绑定 */
+    u32            logical_core_id;  /* 绑定的逻辑核心ID (INVALID_LOGICAL_CORE表示未绑定) */
+    u32            core_affinity;    /* 核心亲和性掩码（用于调度决策） */
+    
+    /* 栈信息 */
+    virt_addr_t    stack_base;    /* 栈基址 */
+    size_t         stack_size;    /* 栈大小 */
+    virt_addr_t    stack_ptr;     /* 当前栈指针 */
+    
+    /* 上下文信息（架构特定） */
+    void *arch_context;           /* 架构上下文指针 */
+    
+    /* 调度信息 */
+    u64    time_slice;            /* 时间片 */
+    u64    cpu_time_used;         /* 已用CPU时间 */
+    u64    last_run_time;         /* 上次执行时间戳 */
+    
+    /* 队列链接 */
+    struct thread *next;          /* 下一个线程 */
+    struct thread *prev;          /* 上一个线程 */
+    
+    /* 等待信息 */
+    u32    wait_flags;
+    void  *wait_data;
+    
+    /* 标志 */
+    u32    flags;
+#define THREAD_FLAG_KERNEL    (1U << 0)  /* 内核线程 */
+#define THREAD_FLAG_USER      (1U << 1)  /* 用户线程 */
+#define THREAD_FLAG_BOUND     (1U << 2)  /* 已绑定到逻辑核心 */
+    
+};
+
+/* 线程管理接口 */
+void thread_system_init(void);
+
+/* 创建线程（必须绑定逻辑核心） */
+hic_status_t thread_create_bound(domain_id_t domain_id, 
+                                  u32 logical_core_id,
+                                  virt_addr_t entry_point,
+                                  priority_t priority, 
+                                  thread_id_t *out);
+
+/* 创建线程（内部接口，仅用于Core-0初始化） */
+hic_status_t thread_create(domain_id_t domain_id, virt_addr_t entry_point,
+                          priority_t priority, thread_id_t *out);
+
+/* 绑定线程到逻辑核心 */
+hic_status_t thread_bind_to_core(thread_id_t thread_id, u32 logical_core_id);
+
+/* 迁移线程到另一个逻辑核心（显式迁移） */
+hic_status_t thread_migrate(thread_id_t thread_id, u32 target_logical_core_id);
+
+/* 获取线程绑定的逻辑核心 */
+u32 thread_get_bound_core(thread_id_t thread_id);
+
+/* 根据逻辑核心 ID 查找线程 */
+thread_id_t thread_find_by_logical_core(u32 logical_core_id);
+
+/* 终止线程 */
+hic_status_t thread_terminate(thread_id_t thread_id);
+
+/* 让出CPU */
+void thread_yield(void);
+
+/* 阻塞/唤醒 */
+hic_status_t thread_block(thread_id_t thread_id);
+hic_status_t thread_wakeup(thread_id_t thread_id);
+
+/* 将线程加入调度队列 */
+hic_status_t thread_ready(thread_id_t thread_id);
+
+/* 全局线程表 */
+extern thread_t g_threads[MAX_THREADS];
+
+/* 调度器接口（由core实现） */
+void scheduler_init(void);
+thread_t *schedule(void);
+void scheduler_tick(void);
+thread_id_t scheduler_pick_next(void);
+void context_switch_to(thread_id_t next_thread);
+
+/* 调度器性能监控 */
+void scheduler_get_perf(u64 *schedule_count, u64 *avg_cycles, u64 *max_cycles);
+void scheduler_print_perf(void);
+
+/* 当前线程 */
+extern thread_t *g_current_thread;
+
+/* 空闲线程 */
+extern thread_t idle_thread;
+
+/* ============================================ */
+/* 形式化验证接口实现 */
+/* ============================================ */
+
+/**
+ * 检查线程是否活跃
+ */
+bool thread_is_active(thread_id_t thread);
+
+/**
+ * 获取线程等待时间
+ */
+u64 get_thread_wait_time(thread_id_t thread);
+
+/**
+ * 获取线程等待的资源
+ */
+cap_id_t get_thread_wait_resource(thread_id_t thread);
+
+#endif /* HIC_KERNEL_THREAD_H */

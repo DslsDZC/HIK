@@ -1,0 +1,47 @@
+# HIC服务模块元数据文件
+
+[service]
+name = password_manager_service
+display_name = 密码管理服务
+version = 1.0.0
+api_version = 1.0
+uuid = 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
+
+[author]
+name = DslsDZC
+email = dsls.dzc@gmail.com
+license = GPL-2.0-only WITH LicenseRef-HIC-service-exception
+
+[description]
+short = 提供密码管理和认证服务
+long = 密码管理服务提供安全的密码存储、验证和策略管理功能。支持密码哈希、复杂度检查和密码过期管理。用于用户认证和访问控制。
+
+[dependencies]
+libc_service = 1.0:1.0:1.0
+core_api = 1.0:1.0:2.0
+
+[resources]
+max_memory = 16384
+max_threads = 2
+max_capabilities = 32
+cpu_quota_percent = 5
+
+[endpoints]
+password_verify = 1.0:password_verify
+password_set = 1.0:password_set
+password_check_policy = 1.0:password_check_policy
+password_hash = 1.0:password_hash
+
+[permissions]
+domain_create = false
+capability_create = false
+
+[security]
+critical = true
+privileged = true
+signature_required = true
+
+[build]
+static = false
+priority = 8
+autostart = false

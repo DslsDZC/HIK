@@ -1,0 +1,47 @@
+# HIC服务模块元数据文件
+
+[service]
+name = config_service
+display_name = 配置管理服务
+version = 1.0.0
+api_version = 1.0
+uuid = 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
+
+[author]
+name = DslsDZC
+email = dsls.dzc@gmail.com
+license = GPL-2.0-only WITH LicenseRef-HIC-service-exception
+
+[description]
+short = 提供系统配置管理服务
+long = 配置管理服务提供系统配置的读取、修改和持久化功能，支持键值对存储和配置文件管理。用于系统参数管理和运行时配置。
+
+[dependencies]
+libc_service = 1.0:1.0:1.0
+core_api = 1.0:1.0:2.0
+
+[resources]
+max_memory = 8192
+max_threads = 1
+max_capabilities = 16
+cpu_quota_percent = 2
+
+[endpoints]
+config_get = 1.0:config_get
+config_set = 1.0:config_set
+config_save = 1.0:config_save
+config_load = 1.0:config_load
+
+[permissions]
+domain_create = false
+capability_create = false
+
+[security]
+critical = false
+privileged = true
+signature_required = false
+
+[build]
+static = false
+priority = 5
+autostart = true

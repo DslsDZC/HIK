@@ -1,0 +1,316 @@
+<!--
+SPDX-FileCopyrightText: 2026 DslsDZC <dsls.dzc@gmail.com>
+
+SPDX-License-Identifier: CC-BY-4.0
+-->
+
+# x86_64引导加载程序设计
+
+基于HIC架构需求，以下是x86_64平台引导加载程序的详细设计方案：
+
+## 一、总体架构
+
+### 1.1 多阶段引导流程
+```
+UEFI/BIOS → HIC Bootloader (多阶段) → HIC Core-0
+    │               │
+    ├─ UEFI模式     ├─ BIOS模式
+    │   (UEFI应用)   │   (MBR+引导扇区)
+    └─ 安全启动      └─ 传统启动
+
+## 三、BIOS引导模式（传统兼容）
+
+### 3.1 多阶段设计
+```
+主引导记录(MBR) → 第一阶段加载器 → 第二阶段加载器 → 内核
+    (512字节)     (1-2KB)          (16-32KB)
+```
+
+### 3.2 第一阶段（MBR/VBR）
+
+**MBR结构（实模式）：**
+```
+0x0000: 引导代码 (446字节)
+0x01BE: 分区表 (64字节)
+0x01FE: 签名 (0x55AA)
+```
+
+**执行流程：**
+1. BIOS加载MBR到`0x7C00`
+2. 切换到保护模式（32位）
+3. 从活动分区加载VBR（卷引导记录）
+4. VBR加载第二阶段加载器到`0x10000`
+
+### 3.3 第二阶段加载器（32位保护模式）
+
+**主要功能：**
+1. **初始化保护模式**
+   - 设置GDT、IDT
+   - 启用A20地址线
+   - 设置临时页表
+
+2. **探测硬件**
+   - 通过BIOS INT 0x15获取内存映射
+   - 探测VESA VBE显示模式
+   - 初始化PS/2键盘控制器
+
+3. **加载内核映像**
+   - 从文件系统（FAT32/EXT2）读取
+   - 支持从硬盘、USB、光盘启动
+   - 实现简单的文件系统驱动
+
+4. **验证内核**
+   - 计算映像哈希（SHA-256）
+   - 与内置公钥比较（简化验证）
+
+5. **切换到长模式**
+   - 设置4级分页
+   - 进入64位长模式
+   - 加载64位GDT
+
+6. **传递信息**
+   - 构建Multiboot2兼容信息结构
+   - 包含内存映射、命令行、模块信息
+
+7. **跳转到内核**
+   - 设置栈指针
+   - 禁用中断
+   - 跳转到内核入口点
+
+## 四、引导信息结构（Boot Information Structure）
+
+### 4.1 通用结构（UEFI和BIOS通用）
+```c
+struct hic_boot_info {
+    uint32_t magic;           // 0x48 0x49 0x4B 0x21 ("HIC!")
+    uint32_t version;         // 结构版本
+    uint64_t flags;           // 特性标志位
+    
+    // 内存信息
+    struct memory_map *mem_map;
+    uint64_t mem_map_size;
+    uint64_t mem_map_desc_size;
+    
+    // ACPI信息
+    void *rsdp;              // ACPI根系统描述指针
+    void *xsdp;              // ACPI扩展系统描述指针（UEFI）
+    
+    // 固件信息
+    union {
+        struct {
+            EFI_SYSTEM_TABLE *system_table;
+            EFI_HANDLE image_handle;
+        } uefi;
+        struct {
+            void *bios_data_area;  // BDA指针
+            uint32_t vbe_info;     // VESA信息块
+        } bios;
+    } firmware;
+    
+    // 内核映像信息
+    void *kernel_base;
+    uint64_t kernel_size;
+    uint64_t entry_point;
+    
+    // 命令行
+    char cmdline[256];
+    
+    // 设备树（x86通常为空）
+    void *device_tree;
+    uint64_t device_tree_size;
+    
+    // 模块信息（用于动态模块加载）
+    struct module_info *modules;
+    uint64_t module_count;
+};
+```
+
+### 4.2 内存映射描述符
+```c
+struct memory_map_entry {
+    uint64_t base_address;
+    uint64_t length;
+    uint32_t type;           // 1=可用, 2=保留, 3=ACPI, 4=NVS, 5=坏内存
+    uint32_t attributes;
+};
+```
+
+## 五、内核映像格式
+
+### 5.1 整体结构
+```
++------------------+
+| HIC 文件头       | 120 字节 (0x00-0x77)
++------------------+
+| 段表             | 48 字节 × 段数量
++------------------+
+| 段数据           | 可变大小
+|  - 代码段        |
+|  - 数据段        |
+|  - 只读数据段    |
+|  - BSS段(无数据) |
+|  - 配置段        |
++------------------+
+| 配置表           | 可变大小 (可选)
++------------------+
+| 签名数据         | 可变大小 (可选)
++------------------+
+```
+
+### 5.2 文件头结构
+```
+偏移量   大小    描述
+0x00     8      魔数 "HIC_IMG" (以\0结尾)
+0x08     2      架构ID (1=x86_64, 2=ARM64, 3=RISC-V64)
+0x0A     2      版本 (主版本 << 8 | 次版本)
+0x0C     8      入口点偏移
+0x14     8      映像总大小
+0x1C     8      段表偏移
+0x24     8      段表项数
+0x2C     8      配置表偏移
+0x34     8      配置表大小
+0x3C     8      签名偏移
+0x44     8      签名大小
+0x4C     64     预留
+```
+
+**头部总大小：120字节**
+
+**C结构体定义：**
+```c
+typedef struct {
+    char     magic[8];              // "HIC_IMG"
+    uint16_t arch_id;               // 架构ID
+    uint16_t version;               // 版本号
+    uint64_t entry_point;           // 入口点偏移
+    uint64_t image_size;            // 映像总大小
+    uint64_t segment_table_offset;  // 段表偏移
+    uint64_t segment_count;         // 段表项数
+    uint64_t config_table_offset;   // 配置表偏移
+    uint64_t config_table_size;     // 配置表大小
+    uint64_t signature_offset;      // 签名偏移
+    uint64_t signature_size;        // 签名大小
+    uint8_t  reserved[64];          // 预留
+} hic_image_header_t;
+```
+
+**注意：**
+- `segment_table_offset` 通常为 120（紧跟文件头）
+- `segment_count` 段表项数（每个段表项 40 字节）
+- `entry_point` 是相对于内核加载基地址的偏移
+
+### 5.3 段表项
+```c
+typedef struct {
+    uint32_t type;                 // 段类型 (1=代码, 2=数据, 3=只读数据, 4=BSS, 5=配置)
+    uint32_t flags;                // 段标志 (位0=可读, 位1=可写, 位2=可执行)
+    uint64_t file_offset;          // 文件中的偏移
+    uint64_t memory_offset;        // 内存中的偏移
+    uint64_t file_size;            // 文件大小
+    uint64_t memory_size;          // 内存大小
+} hic_segment_entry_t;
+```
+
+**段表项大小：40字节 (4+4+8×4)**
+
+**段类型定义：**
+```c
+#define HIC_SEGMENT_TYPE_CODE    1   // 代码段
+#define HIC_SEGMENT_TYPE_DATA    2   // 数据段
+#define HIC_SEGMENT_TYPE_RODATA  3   // 只读数据段
+#define HIC_SEGMENT_TYPE_BSS     4   // BSS段（零初始化）
+#define HIC_SEGMENT_TYPE_CONFIG  5   // 配置段
+```
+
+**段标志定义：**
+```c
+#define HIC_SEGMENT_FLAG_READABLE    (1 << 0)  // 可读
+#define HIC_SEGMENT_FLAG_WRITABLE    (1 << 1)  // 可写
+#define HIC_SEGMENT_FLAG_EXECUTABLE  (1 << 2)  // 可执行
+```
+
+### 5.4 简化格式（内核）
+
+对于简单的内核（如当前实现），可以使用简化格式：
+- 段表项数：1
+- 段表偏移：120
+- 段类型：1 (CODE)
+- 段标志：0x7 (可读+可写+可执行)
+- 文件偏移：160 (120 + 40)
+- 内存偏移：0x100000 (内核加载地址)
+- 文件大小 = 内存大小
+
+**示例布局：**
+```
+偏移     大小      内容
+0x00     120      HIC 文件头
+0x78     40       段表 (1个段)
+0xA0     N        内核代码
+```
+
+## 六、安全启动实现
+
+### 6.1 签名验证流程
+```
+加载映像 → 计算哈希 → 提取签名 → 验证签名 → 加载内核
+    │          │           │          │
+    │          SHA-384     │          RSA-3072验证
+    │                      │
+    │                 PKCS#1 v2.1签名
+    └───────── 公钥证书链验证 ────────┘
+```
+
+### 6.2 密钥管理
+- **平台密钥(PK)**：存储在UEFI固件或TPM
+- **内核签名密钥(KSK)**：用于签名内核映像
+- **恢复密钥(RK)**：用于恢复模式
+- **开发密钥(DK)**：仅用于开发构建
+
+## 七、恢复与调试支持
+
+### 7.1 恢复模式
+- **内核故障检测**：通过启动计数器检测连续失败
+- **自动回滚**：加载备份内核映像
+- **恢复控制台**：通过串口或网络提供诊断接口
+- **网络恢复**：通过TFTP/PXE重新下载内核
+
+### 7.2 调试接口
+- **串口输出**：COM1 (0x3F8) 或 COM2 (0x2F8)
+- **内存日志缓冲区**：固定物理地址的循环缓冲区
+- **QEMU/GDB支持**：通过0xE9端口输出和调试器接口
+- **错误代码显示**：通过VGA文本模式显示错误信息
+
+## 八、构建系统集成
+
+### 8.1 构建流程
+```
+1. 编译引导加载程序
+   $ make bootloader ARCH=x86_64 MODE=uefi
+   
+2. 生成内核映像
+   $ make kernel
+   
+3. 签名内核映像
+   $ make sign-kernel KEY=production
+   
+4. 创建启动介质
+   $ make install TARGET=usb DISK=/dev/sdb
+```
+
+### 8.2 输出文件
+- **UEFI**：`bootx64.efi`（引导加载程序） + `kernel.hic`（内核）
+- **BIOS**：`boot.bin`（引导扇区） + `loader.bin`（第二阶段）
+- **ISO映像**：`hic-x86_64.iso`（用于虚拟机测试）
+
+## 九、测试与验证
+
+### 9.1 测试环境
+- **QEMU/KVM**：用于虚拟化测试
+- **物理硬件**：Intel/AMD服务器和工作站
+- **CI/CD集成**：自动化构建和启动测试
+
+### 9.2 验证要点
+1. **启动时间**：从UEFI到内核入口的总时间
+2. **内存占用**：引导加载程序的内存使用量
+3. **兼容性**：在不同硬件平台的兼容性
+4. **安全性**：签名验证的可靠性

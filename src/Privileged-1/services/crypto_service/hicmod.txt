@@ -1,0 +1,47 @@
+# HIC服务模块元数据文件
+
+[service]
+name = crypto_service
+display_name = 加密服务
+version = 1.0.0
+api_version = 1.0
+uuid = 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
+
+[author]
+name = DslsDZC
+email = dsls.dzc@gmail.com
+license = GPL-2.0-only WITH LicenseRef-HIC-service-exception
+
+[description]
+short = 提供加密和哈希服务
+long = 加密服务提供基础的加密算法和哈希函数，包括SHA-256、AES等。用于数据加密、签名验证和安全通信。
+
+[dependencies]
+libc_service = 1.0:1.0:1.0
+core_api = 1.0:1.0:2.0
+
+[resources]
+max_memory = 32768
+max_threads = 2
+max_capabilities = 24
+cpu_quota_percent = 8
+
+[endpoints]
+crypto_hash = 1.0:crypto_hash
+crypto_encrypt = 1.0:crypto_encrypt
+crypto_decrypt = 1.0:crypto_decrypt
+crypto_verify = 1.0:crypto_verify
+
+[permissions]
+domain_create = false
+capability_create = false
+
+[security]
+critical = true
+privileged = true
+signature_required = true
+
+[build]
+static = false
+priority = 6
+autostart = true

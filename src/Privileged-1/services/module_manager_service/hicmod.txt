@@ -1,0 +1,48 @@
+# HIC服务模块元数据文件
+
+[service]
+name = module_manager_service
+display_name = 模块管理服务
+version = 1.0.0
+api_version = 1.0
+uuid = 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
+
+[author]
+name = DslsDZC
+email = dsls.dzc@gmail.com
+license = GPL-2.0-only WITH LicenseRef-HIC-service-exception
+
+[description]
+short = 提供模块动态加载管理服务
+long = 模块管理服务提供动态模块的加载、卸载、更新和依赖管理功能。支持热插拔和滚动更新，用于系统的动态扩展。
+
+[dependencies]
+libc_service = 1.0:1.0:1.0
+core_api = 1.0:1.0:2.0
+
+[resources]
+max_memory = 65536
+max_threads = 3
+max_capabilities = 48
+cpu_quota_percent = 10
+
+[endpoints]
+module_load = 1.0:module_load
+module_unload = 1.0:module_unload
+module_list = 1.0:module_list
+module_info = 1.0:module_info
+module_update = 1.0:module_update
+
+[permissions]
+domain_create = true
+capability_create = false
+
+[security]
+critical = true
+privileged = true
+signature_required = true
+
+[build]
+static = false
+priority = 2
+autostart = true

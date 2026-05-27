@@ -1,0 +1,631 @@
+/*
+ * SPDX-FileCopyrightText: 2026 DslsDZC <dsls.dzc@gmail.com>
+ *
+ * SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-HIC-service-exception
+ */
+
+/**
+ * HIC内核线程管理实现
+ */
+
+#include "thread.h"
+#include "types.h"
+#include "hal.h"
+#include "pmm.h"
+#include "lib/mem.h"
+#include "atomic.h"
+#include "logical_core.h"
+#include "console.h"
+#include "domain_switch.h"
+#include "pagetable.h"
+
+/* 全局线程表 */
+thread_t g_threads[MAX_THREADS];
+
+/* 全局线程ID位图 - 用于线程槽分配 */
+static u64 g_thread_bitmap[(MAX_THREADS + 63) / 64] = {0};
+
+/* 前向声明 */
+static void thread_exit_handler(void);
+
+/**
+ * 线程启动包装函数
+ * 
+ * 这个函数被 context_switch 的 ret 调用。
+ * 它会调用实际的线程入口函数，然后在函数返回时调用 thread_exit_handler。
+ * 
+ * 栈布局（进入此函数时）:
+ *   [callee-saved 空间]  <- RSP 指向这里
+ *   entry_point          <- 栈顶（将被弹出）
+ */
+__attribute__((naked)) static void thread_entry_wrapper(void)
+{
+    /*
+     * 这个函数使用 naked 属性，不生成任何函数序言/尾声代码。
+     * 
+     * 进入时：
+     * - RSP 指向 callee-saved 空间的末尾
+     * - 栈顶（RSP 指向的位置）是入口点地址
+     * - 其下方是 thread_exit_handler 地址
+     * 
+     * 我们需要：
+     * 1. 弹出入口点地址到 RAX
+     * 2. 调用入口函数（使用 call，这样返回地址会被压栈）
+     * 3. 入口函数返回后，跳转到 thread_exit_handler
+     */
+    __asm__ volatile (
+        /* 弹出入口点地址 */
+        "popq %%rax\n\t"          /* RAX = entry_point */
+        /* 调用入口函数 */
+        "call *%%rax\n\t"         /* 调用 entry_point() */
+        /* 入口函数返回，跳转到退出处理 */
+        "movq %0, %%rax\n\t"      /* 将退出处理函数地址加载到 RAX */
+        "jmp *%%rax\n\t"          /* 跳转到 thread_exit_handler */
+        :
+        : "r" (thread_exit_handler)
+        : "memory", "rax"
+    );
+}
+
+/* 线程退出处理函数 - 当线程入口函数返回时调用 */
+static void thread_exit_handler(void)
+{
+    /* 使用串口输出调试信息 */
+    extern void serial_print(const char*);
+    extern thread_t idle_thread;
+    serial_print("[THREAD_EXIT] Thread completed, calling schedule()\n");
+
+    /* 保存g_current_thread指针，因为schedule()会修改它 */
+    thread_t *exiting_thread = g_current_thread;
+
+    /* 线程完成，标记为终止状态 */
+    if (exiting_thread != NULL && exiting_thread != &idle_thread) {
+        exiting_thread->state = THREAD_STATE_TERMINATED;
+    }
+
+    /* 让出CPU，调度下一个线程 */
+    schedule();
+
+    /* 不应该到达这里 */
+    serial_print("[THREAD_EXIT] ERROR: Returned from schedule()!\n");
+    while (1) {
+        __asm__ volatile("hlt");
+    }
+}
+
+/* 线程系统初始化 */
+void thread_system_init(void)
+{
+    /* 清空线程表 */
+    memzero(g_threads, sizeof(g_threads));
+    
+    /* 初始化调度器 */
+    scheduler_init();
+    
+    /* 初始化空闲线程 */
+    extern thread_t idle_thread;
+    idle_thread.thread_id = 0xFFFFFFFF;
+    idle_thread.state = THREAD_STATE_READY;
+    idle_thread.priority = HIC_PRIORITY_IDLE;
+    idle_thread.last_run_time = 0;
+    idle_thread.time_slice = 0;
+}
+
+/* 检查线程是否活跃 */
+bool thread_is_active(thread_id_t thread)
+{
+    if (thread >= MAX_THREADS) {
+        return false;
+    }
+
+    thread_t *t = &g_threads[thread];
+
+    return t != NULL && (t->state == THREAD_STATE_READY ||
+                           t->state == THREAD_STATE_RUNNING ||
+                           t->state == THREAD_STATE_BLOCKED ||
+                           t->state == THREAD_STATE_WAITING);
+}
+
+/* 获取线程等待时间 */
+u64 get_thread_wait_time(thread_id_t thread)
+{
+    if (thread >= MAX_THREADS) {
+        return 0;
+    }
+
+    thread_t *t = &g_threads[thread];
+    if (!t) {
+        return 0;
+    }
+
+    /* 完整实现：计算线程等待时间 */
+    /* 实现等待时间计算 */
+    /* 需要实现：
+     * 1. 记录线程开始等待的时间戳
+     * 2. 计算当前时间与开始时间的差值
+     * 3. 返回等待时间（纳秒）
+     */
+    (void)t;
+    return 0;
+}
+
+/* 获取线程等待的资源 */
+cap_id_t get_thread_wait_resource(thread_id_t thread)
+{
+    if (thread >= MAX_THREADS) {
+        return INVALID_CAP_ID;
+    }
+
+    thread_t *t = &g_threads[thread];
+    if (!t) {
+        return INVALID_CAP_ID;
+    }
+
+    /* 返回等待的能力ID（如果适用） */
+    if (t->wait_data) {
+        return (cap_id_t)(uintptr_t)t->wait_data;
+    }
+
+    return INVALID_CAP_ID;
+}
+
+/* 终止线程 */
+hic_status_t thread_terminate(thread_id_t thread_id)
+{
+    if (thread_id >= MAX_THREADS) {
+        return HIC_ERROR_INVALID_PARAM;
+    }
+
+    thread_t *t = &g_threads[thread_id];
+    if (!t) {
+        return HIC_ERROR_NOT_FOUND;
+    }
+
+    /* 将线程状态设置为已终止 */
+    t->state = THREAD_STATE_TERMINATED;
+
+    /* 通知调度器清理资源 */
+    if (t->prev != NULL) {
+        t->prev->next = t->next;
+    }
+    if (t->next != NULL) {
+        t->next->prev = t->prev;
+    }
+    
+    /* 如果是当前线程，触发调度 */
+    if (g_current_thread == t) {
+        g_current_thread = NULL;
+    }
+    
+    /* 回收线程栈空间 */
+    if (t->stack_base != 0) {
+        u32 stack_pages = (u32)((t->stack_size + HAL_PAGE_SIZE - 1) / HAL_PAGE_SIZE);
+        pmm_free_frames(t->stack_base, stack_pages);
+        t->stack_base = 0;
+        t->stack_size = 0;
+    }
+
+    return HIC_SUCCESS;
+}
+
+/* 创建线程（必须绑定逻辑核心） */
+hic_status_t thread_create_bound(domain_id_t domain_id, 
+                                  u32 logical_core_id,
+                                  virt_addr_t entry_point,
+                                  priority_t priority, 
+                                  thread_id_t *out)
+{
+    if (out == NULL || domain_id >= HIC_DOMAIN_MAX) {
+        return HIC_ERROR_INVALID_PARAM;
+    }
+    
+    /* 验证逻辑核心ID */
+    extern logical_core_t g_logical_cores[];
+    if (logical_core_id >= MAX_LOGICAL_CORES) {
+        return HIC_ERROR_INVALID_PARAM;
+    }
+    
+    logical_core_t *core = &g_logical_cores[logical_core_id];
+    
+    /* 检查逻辑核心是否属于该域 */
+    if (core->owner_domain != domain_id) {
+        return HIC_ERROR_PERMISSION_DENIED;
+    }
+    
+    /* 检查逻辑核心状态 */
+    if (core->state != LOGICAL_CORE_STATE_ALLOCATED &&
+        core->state != LOGICAL_CORE_STATE_ACTIVE) {
+        return HIC_ERROR_INVALID_STATE;
+    }
+    
+    /* 使用全局位图快速查找空闲线程槽 */
+    thread_id_t free_slot = MAX_THREADS;
+    bool irq = atomic_enter_critical();
+    
+    /* 在位图中查找空闲位 */
+    for (u32 i = 0; i < (MAX_THREADS + 63) / 64 && free_slot == MAX_THREADS; i++) {
+        if (g_thread_bitmap[i] != 0xFFFFFFFFFFFFFFFFULL) {
+            /* 找到有空闲位的块 */
+            for (u32 j = 0; j < 64; j++) {
+                u32 idx = i * 64 + j;
+                if (idx >= MAX_THREADS) break;
+                
+                if (!(g_thread_bitmap[i] & (1ULL << j))) {
+                    /* 找到空闲槽 */
+                    free_slot = idx;
+                    g_thread_bitmap[i] |= (1ULL << j);
+                    break;
+                }
+            }
+        }
+    }
+    
+    if (free_slot >= MAX_THREADS) {
+        atomic_exit_critical(irq);
+        return HIC_ERROR_NO_RESOURCE;
+    }
+    
+    /* 分配内核栈 (2 页 = 8KB) */
+    extern hic_status_t pmm_alloc_frames(domain_id_t owner, u32 count,
+                                          page_frame_type_t type, phys_addr_t *out);
+    phys_addr_t stack_phys;
+    hic_status_t status = pmm_alloc_frames(domain_id, 2, PAGE_FRAME_PRIVILEGED, &stack_phys);
+    if (status != HIC_SUCCESS) {
+        atomic_exit_critical(irq);
+        return HIC_ERROR_NO_RESOURCE;
+    }
+
+    /* 将栈映射到域的页表中（确保 CR3 切换后栈可访问） */
+    {
+        extern page_table_t* domain_switch_get_pagetable(domain_id_t domain);
+        page_table_t* domain_pagetable = domain_switch_get_pagetable(domain_id);
+        if (domain_pagetable != NULL) {
+            extern hic_status_t pagetable_map(page_table_t *pt, virt_addr_t vaddr,
+                                               phys_addr_t paddr, size_t size,
+                                               page_perm_t perm, map_type_t type);
+            pagetable_map(domain_pagetable,
+                          (virt_addr_t)stack_phys,  /* 虚拟地址 = 物理地址（恒等映射）*/
+                          stack_phys,                /* 物理地址 */
+                          2 * PAGE_SIZE,             /* 大小 */
+                          PERM_RW,                   /* 读写权限 */
+                          MAP_TYPE_USER);           /* 内核栈映射（恒等映射）*/
+        }
+    }
+
+    /* 初始化线程结构 */
+    thread_t *thread = &g_threads[free_slot];
+    memzero(thread, sizeof(thread_t));
+    
+    thread->thread_id = free_slot;
+    thread->domain_id = domain_id;
+    thread->state = THREAD_STATE_READY;
+    thread->priority = priority;
+    thread->logical_core_id = logical_core_id;  /* 绑定逻辑核心 */
+    thread->core_affinity = 0xFFFFFFFF;          /* 默认所有核心亲和性 */
+    thread->flags = THREAD_FLAG_BOUND;           /* 标记已绑定 */
+    thread->stack_base = (virt_addr_t)stack_phys;
+    thread->stack_size = 2 * PAGE_SIZE;
+    thread->last_run_time = 0;
+    thread->cpu_time_used = 0;
+    thread->time_slice = 100;  /* 默认时间片 */
+    thread->wait_flags = 0;
+    
+    /* 初始化栈：设置入口点和退出处理
+     * 栈布局（从高到低）:
+     *   thread_exit_handler  <- 入口函数返回时跳转到这里
+     *   entry_point          <- context_switch ret 后跳转到这里
+     *   [callee-saved 空间]  <- stack_ptr 指向这里
+     */
+    u64 *stack_top = (u64 *)(stack_phys + 2 * PAGE_SIZE);
+    
+    /* 压入线程退出处理函数地址 */
+    stack_top--;
+    *stack_top = (u64)thread_exit_handler;
+    
+    /* 压入入口点地址（作为首次调度的返回地址） */
+    stack_top--;
+    *stack_top = (u64)entry_point;
+    
+    /* 为 callee-saved 寄存器预留空间 (rbx, rbp, r12-r15 = 6 个) */
+    stack_top -= 6;
+    
+    thread->stack_ptr = (virt_addr_t)stack_top;
+    
+    /* 更新逻辑核心状态 */
+    if (core->running_thread == INVALID_THREAD) {
+        core->running_thread = free_slot;
+    }
+    if (core->state == LOGICAL_CORE_STATE_ALLOCATED) {
+        core->state = LOGICAL_CORE_STATE_ACTIVE;
+    }
+    
+    atomic_exit_critical(irq);
+    
+    /* 调试：打印栈关键地址（在关键区外） */
+    {
+        console_puts("[STACK_INIT] thread=");
+        console_puthex64(free_slot);
+        console_puts(" exit_handler=0x");
+        console_puthex64((u64)thread_exit_handler);
+        console_puts(" entry=0x");
+        console_puthex64((u64)entry_point);
+        console_puts(" stack_ptr=0x");
+        console_puthex64(thread->stack_ptr);
+        console_puts("\n");
+    }
+    
+    /* 将线程加入调度队列 */
+    thread_ready(free_slot);
+    
+    *out = free_slot;
+    return HIC_SUCCESS;
+}
+
+/* 创建线程（自动分配逻辑核心如果域还没有） */
+hic_status_t thread_create(domain_id_t domain_id, virt_addr_t entry_point,
+                          priority_t priority, thread_id_t *out)
+{
+    if (out == NULL || domain_id >= HIC_DOMAIN_MAX) {
+        return HIC_ERROR_INVALID_PARAM;
+    }
+    
+    /* 查找域是否已有逻辑核心 */
+    logical_core_id_t existing_core = INVALID_LOGICAL_CORE;
+    for (u32 i = 0; i < MAX_LOGICAL_CORES; i++) {
+        if (g_logical_cores[i].owner_domain == domain_id &&
+            (g_logical_cores[i].state == LOGICAL_CORE_STATE_ALLOCATED ||
+             g_logical_cores[i].state == LOGICAL_CORE_STATE_ACTIVE)) {
+            existing_core = i;
+            break;
+        }
+    }
+    
+    /* 如果域还没有逻辑核心，自动分配一个 */
+    logical_core_id_t target_core = existing_core;
+    if (target_core == INVALID_LOGICAL_CORE) {
+        cap_handle_t lcore_handle;
+        hic_status_t alloc_status = hic_logical_core_allocate(domain_id, 1,
+                                                              0,    /* 无特殊标志 */
+                                                              10,   /* 10% CPU 配额 */
+                                                              NULL, /* 无亲和性限制 */
+                                                              &lcore_handle);
+        if (alloc_status != HIC_SUCCESS) {
+            console_puts("[THREAD] WARN: Failed to auto-allocate logical core for domain ");
+            console_putu64(domain_id);
+            console_puts("\n");
+            /* 继续创建线程，但标记为未绑定 */
+        } else {
+            target_core = logical_core_validate_handle(domain_id, lcore_handle);
+            console_puts("[THREAD] Auto-allocated logical core ");
+            console_putu64(target_core);
+            console_puts(" for domain ");
+            console_putu64(domain_id);
+            console_puts("\n");
+        }
+    }
+    
+    /* 使用全局位图快速查找空闲线程槽 */
+    thread_id_t free_slot = MAX_THREADS;
+    bool irq = atomic_enter_critical();
+    
+    /* 在位图中查找空闲位 */
+    for (u32 i = 0; i < (MAX_THREADS + 63) / 64 && free_slot == MAX_THREADS; i++) {
+        if (g_thread_bitmap[i] != 0xFFFFFFFFFFFFFFFFULL) {
+            /* 找到有空闲位的块 */
+            for (u32 j = 0; j < 64; j++) {
+                u32 idx = i * 64 + j;
+                if (idx >= MAX_THREADS) break;
+                
+                if (!(g_thread_bitmap[i] & (1ULL << j))) {
+                    /* 找到空闲槽 */
+                    free_slot = idx;
+                    g_thread_bitmap[i] |= (1ULL << j);
+                    break;
+                }
+            }
+        }
+    }
+    
+    if (free_slot >= MAX_THREADS) {
+        atomic_exit_critical(irq);
+        return HIC_ERROR_NO_RESOURCE;
+    }
+    
+    /* 分配内核栈 (2 页 = 8KB) */
+    extern hic_status_t pmm_alloc_frames(domain_id_t owner, u32 count,
+                                          page_frame_type_t type, phys_addr_t *out);
+    phys_addr_t stack_phys;
+    hic_status_t status = pmm_alloc_frames(domain_id, 2, PAGE_FRAME_PRIVILEGED, &stack_phys);
+    if (status != HIC_SUCCESS) {
+        atomic_exit_critical(irq);
+        return HIC_ERROR_NO_RESOURCE;
+    }
+    
+    /* 将栈映射到域的页表中 */
+    page_table_t* domain_pagetable = domain_switch_get_pagetable(domain_id);
+    if (domain_pagetable != NULL) {
+        hic_status_t map_status = pagetable_map(domain_pagetable,
+                      (virt_addr_t)stack_phys,  /* 虚拟地址 = 物理地址（恒等映射）*/
+                      stack_phys,                /* 物理地址 */
+                      2 * PAGE_SIZE,             /* 大小 */
+                      PERM_RW,                   /* 读写权限 */
+                      MAP_TYPE_USER);            /* 用户映射 */
+        /* 调试：显示栈映射 */
+        console_puts("[THREAD] Mapped stack 0x");
+        console_puthex64(stack_phys);
+        console_puts(" for domain ");
+        console_putu32(domain_id);
+        console_puts(", status=");
+        console_putu32(map_status);
+        console_puts("\n");
+    }
+    
+    /* 初始化线程结构 */
+    thread_t *thread = &g_threads[free_slot];
+    memzero(thread, sizeof(thread_t));
+    
+    thread->thread_id = free_slot;
+    thread->domain_id = domain_id;
+    thread->state = THREAD_STATE_READY;
+    thread->priority = priority;
+    thread->logical_core_id = target_core;  /* 绑定自动分配的逻辑核心 */
+    thread->core_affinity = 0xFFFFFFFF;      /* 默认所有核心亲和性 */
+    thread->flags = (target_core != INVALID_LOGICAL_CORE) ? THREAD_FLAG_BOUND : 0;
+    thread->stack_base = (virt_addr_t)stack_phys;
+    thread->stack_size = 2 * PAGE_SIZE;
+    thread->last_run_time = 0;
+    thread->cpu_time_used = 0;
+    thread->time_slice = 100;  /* 默认时间片 */
+    thread->wait_flags = 0;
+    
+    /* 初始化栈：设置入口点和退出处理 */
+    u64 *stack_top = (u64 *)(stack_phys + 2 * PAGE_SIZE);
+    
+    /* 压入线程退出处理函数地址 */
+    stack_top--;
+    *stack_top = (u64)thread_exit_handler;
+    
+    /* 压入入口点地址（作为首次调度的返回地址） */
+    stack_top--;
+    *stack_top = (u64)entry_point;
+    
+    /* 为 callee-saved 寄存器预留空间 (rbx, rbp, r12-r15 = 6 个) */
+    stack_top -= 6;
+    
+    thread->stack_ptr = (virt_addr_t)stack_top;
+    
+    atomic_exit_critical(irq);
+    
+    /* 将线程加入调度队列 */
+    thread_ready(free_slot);
+    
+    *out = free_slot;
+    return HIC_SUCCESS;
+}
+
+/* 绑定线程到逻辑核心 */
+hic_status_t thread_bind_to_core(thread_id_t thread_id, u32 logical_core_id)
+{
+    if (thread_id >= MAX_THREADS) {
+        return HIC_ERROR_INVALID_PARAM;
+    }
+    
+    extern logical_core_t g_logical_cores[];
+    if (logical_core_id >= MAX_LOGICAL_CORES) {
+        return HIC_ERROR_INVALID_PARAM;
+    }
+    
+    thread_t *thread = &g_threads[thread_id];
+    logical_core_t *core = &g_logical_cores[logical_core_id];
+    
+    /* 验证所有权 */
+    if (core->owner_domain != thread->domain_id) {
+        return HIC_ERROR_PERMISSION_DENIED;
+    }
+    
+    bool irq = atomic_enter_critical();
+    
+    thread->logical_core_id = logical_core_id;
+    thread->flags |= THREAD_FLAG_BOUND;
+    
+    atomic_exit_critical(irq);
+    
+    return HIC_SUCCESS;
+}
+
+/* 迁移线程到另一个逻辑核心（显式迁移，AMP 机制） */
+hic_status_t thread_migrate(thread_id_t thread_id, u32 target_logical_core_id)
+{
+    if (thread_id >= MAX_THREADS) {
+        return HIC_ERROR_INVALID_PARAM;
+    }
+    
+    extern logical_core_t g_logical_cores[];
+    if (target_logical_core_id >= MAX_LOGICAL_CORES) {
+        return HIC_ERROR_INVALID_PARAM;
+    }
+    
+    thread_t *thread = &g_threads[thread_id];
+    logical_core_t *target_core = &g_logical_cores[target_logical_core_id];
+    
+    /* 验证目标核心所有权（必须属于同一线程的域） */
+    if (target_core->owner_domain != thread->domain_id) {
+        return HIC_ERROR_PERMISSION_DENIED;
+    }
+    
+    /* 验证目标核心状态 */
+    if (target_core->state != LOGICAL_CORE_STATE_ALLOCATED &&
+        target_core->state != LOGICAL_CORE_STATE_ACTIVE) {
+        return HIC_ERROR_INVALID_STATE;
+    }
+    
+    bool irq = atomic_enter_critical();
+    
+    u32 old_core_id = thread->logical_core_id;
+    
+    /* 如果线程正在运行，不能迁移 */
+    if (thread->state == THREAD_STATE_RUNNING) {
+        atomic_exit_critical(irq);
+        return HIC_ERROR_INVALID_STATE;
+    }
+    
+    /* 从旧核心队列移除（如果在队列中） */
+    if (old_core_id < MAX_LOGICAL_CORES && thread->state == THREAD_STATE_READY) {
+        /* 注意：简化实现，实际应该从调度器队列中移除 */
+        /* 这里只是标记状态，调度器会在下次调度时处理 */
+    }
+    
+    /* 更新绑定 */
+    thread->logical_core_id = target_logical_core_id;
+    thread->flags |= THREAD_FLAG_BOUND;
+    
+    /* 更新目标核心状态 */
+    if (target_core->state == LOGICAL_CORE_STATE_ALLOCATED) {
+        target_core->state = LOGICAL_CORE_STATE_ACTIVE;
+    }
+    
+    /* 如果线程是 READY 状态，需要重新入队到新核心 */
+    if (thread->state == THREAD_STATE_READY) {
+        /* 通知调度器重新入队 */
+        thread_ready(thread_id);
+    }
+    
+    atomic_exit_critical(irq);
+    
+    console_puts("[THREAD] Migrated thread ");
+    console_putu32(thread_id);
+    console_puts(" from core ");
+    console_putu32(old_core_id);
+    console_puts(" to core ");
+    console_putu32(target_logical_core_id);
+    console_puts("\n");
+    
+    return HIC_SUCCESS;
+}
+
+/* 获取线程绑定的逻辑核心 */
+u32 thread_get_bound_core(thread_id_t thread_id)
+{
+    if (thread_id >= MAX_THREADS) {
+        return INVALID_LOGICAL_CORE;
+    }
+    
+    thread_t *thread = &g_threads[thread_id];
+    return thread->logical_core_id;
+}
+
+/**
+ * 根据逻辑核心 ID 查找线程
+ */
+thread_id_t thread_find_by_logical_core(u32 logical_core_id)
+{
+    for (thread_id_t i = 0; i < MAX_THREADS; i++) {
+        /* 检查线程是否有效且绑定到指定核心 */
+        if (g_threads[i].domain_id != HIC_INVALID_DOMAIN &&
+            g_threads[i].state != THREAD_STATE_TERMINATED &&
+            g_threads[i].logical_core_id == logical_core_id) {
+            return i;
+        }
+    }
+    return INVALID_THREAD;
+}
