@@ -16,6 +16,9 @@
 static module_instance_t g_module_table[MAX_MODULES];
 static int g_module_count = 0;
 
+/* 串口输出 */
+extern void serial_putchar(char c);
+
 /* 简单的内存分配器（简化版） */
 static void *g_module_memory_pool = (void *)0x20000000;  /* 512MB 开始 */
 static u32 g_module_memory_offset = 0;

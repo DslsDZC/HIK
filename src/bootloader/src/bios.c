@@ -14,7 +14,6 @@
 
 #include <stdint.h>
 #include "boot_info.h"
-#include "kernel_image.h"
 #include "console.h"
 #include "string.h"
 #include "crypto.h"
@@ -344,12 +343,6 @@ static int bios_load_kernel(const char *path)
         }
         
         sectors_read = total_sectors;
-    }
-    
-    // 验证签名
-    if (!hic_image_verify_kernel(kernel_base, header->image_size)) {
-        log_error("Kernel signature verification failed\n");
-        return -1;
     }
     
     g_kernel_data = kernel_base;

@@ -50,7 +50,7 @@ static inline cap_id_t cap_core_first_free(void) {
 /* ==================== 共享内存区域配置 ==================== */
 #define MAX_SHMEM_REGIONS  64
 
-/* 共享内存区域表（前置声明供机制层使用） */
+/* 共享内存区域表 */
 static shmem_region_t g_shmem_regions[MAX_SHMEM_REGIONS];
 
 /* ==================== 域密钥表（每个域一个） ==================== */
@@ -79,7 +79,7 @@ void capability_system_init(void) {
     
     /* 初始化 per-core 分配指针 */
     for (u32 i = 0; i < CAP_MAX_CORES; i++) {
-        g_cap_next_free[i] = cap_core_base(i);
+        g_cap_next_free[i] = cap_core_base(i) + 1;  /* skip slot 0 (HIC_CAP_INVALID) */
     }
     console_puts("[CAP] Per-core slot allocators initialized (");
     console_putu32(CAP_SLOTS_PER_CORE);
@@ -894,10 +894,6 @@ hic_status_t cap_get_logical_core_policy(cap_id_t cap_id,
 
 /* ==================== 共享内存机制层实现 ==================== */
 
-/* 共享内存区域表 */
-#define MAX_SHMEM_REGIONS  64
-static shmem_region_t g_shmem_regions[MAX_SHMEM_REGIONS];
-
 /**
  * 分配共享内存区域（机制层）
  */
@@ -1430,13 +1426,13 @@ static u8 cnode_calc_slot_bits(u32 slot_count) {
 static cnode_t* cnode_alloc(u16 slot_count) {
     /* 计算需要的内存大小：cnode_t + 槽位数组 */
     size_t size = sizeof(cnode_t) + slot_count * sizeof(cnode_slot_t);
-    
+
     /* 从池中查找空闲块 */
     for (u32 i = 0; i < CNODE_POOL_SIZE; i++) {
         if (!g_cnode_pool[i].in_use) {
             /* 简化实现：每个池项是一个固定大小的内存块 */
             /* 实际实现应该从 PMM 分配 */
-            
+
             if (size <= CNODE_BLOCK_SIZE) {
                 g_cnode_pool[i].cnode = (cnode_t*)g_cnode_memory_pool[i];
                 g_cnode_pool[i].in_use = 1;
@@ -1445,8 +1441,33 @@ static cnode_t* cnode_alloc(u16 slot_count) {
             }
         }
     }
-    
+
     return NULL;
+}
+
+/**
+ * @brief 获取 CNode 块的尾部空闲区（供 domain_create 零栈临时存储）
+ *
+ * CNode 内存块为 8KB，顶部被 cnode_t 头部 + slot 数组占用。
+ * 尾部剩余空间可复用为域创建时的临时数据区，零栈开销。
+ *
+ * 内存布局:
+ * ┌─ CNODE_BLOCK_SIZE (8192) ──────────────────┐
+ * │ cnode_t + slot[]  (实际使用 ~4128B)        │
+ * ├────────────────────────────────────────────┤
+ * │ 空闲尾部 (4064B) ← 用于 domain_create 暂存  │
+ * └────────────────────────────────────────────┘
+ *
+ * @param cnode  CNode 指针（cnode_alloc 的返回值）
+ * @param nslots 此 CNode 的槽位数
+ * @return 尾部空闲区的起始地址
+ */
+void* cnode_tail_scratch(cnode_t *cnode, u16 nslots)
+{
+    if (!cnode) return NULL;
+    size_t used = sizeof(cnode_t) + (size_t)nslots * sizeof(cnode_slot_t);
+    if (used >= CNODE_BLOCK_SIZE) return NULL;
+    return (u8*)cnode + used;
 }
 
 /**

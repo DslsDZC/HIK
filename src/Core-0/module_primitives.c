@@ -38,6 +38,8 @@ static domain_id_t get_current_domain_id(void)
 
 /* ==================== 初始化 ==================== */
 
+domain_id_t g_precreated_domain_id = HIC_INVALID_DOMAIN;
+
 void module_primitives_init(void)
 {
     console_puts("[PRIMITIVES] Module primitives initialized\n");
@@ -227,79 +229,38 @@ hic_status_t module_memory_alloc(domain_id_t domain_id,
         console_puts("\n");
         return status;
     }
-    
+
     /* 对齐大小到页边界 */
     u32 page_count = (u32)((size + PAGE_SIZE - 1) / PAGE_SIZE);
-    
+
     /* 首先尝试连续分配 */
     status = pmm_alloc_frames(domain_id, page_count, page_type, phys_addr);
-    
+
     if (status == HIC_SUCCESS) {
         console_puts("[PRIMITIVES] Consecutive allocation succeeded\n");
+        /* 消耗内存配额 */
+        domain_quota_consume(domain_id, QUOTA_TYPE_MEMORY, (size_t)page_count * PAGE_SIZE);
     } else {
         /* 连续分配失败，尝试分散分配 */
         console_puts("[PRIMITIVES] Consecutive allocation failed, trying scattered allocation\n");
-        
+
         phys_addr_t *pages = (phys_addr_t *)0x20000000;  /* 临时缓冲区 */
         status = pmm_alloc_scattered(domain_id, page_count, page_type, pages);
-        
+
         if (status == HIC_SUCCESS) {
             *phys_addr = pages[0];  /* 返回第一页地址 */
             console_puts("[PRIMITIVES] Scattered allocation succeeded, first page at 0x");
             console_puthex64(*phys_addr);
             console_puts("\n");
+            /* 消耗内存配额 */
+            domain_quota_consume(domain_id, QUOTA_TYPE_MEMORY, (size_t)page_count * PAGE_SIZE);
         } else {
             console_puts("[PRIMITIVES] Both allocation strategies failed\n");
             return status;
         }
     }
-    
-    /* 将分配的内存映射到域的页表中 */
-    page_table_t* domain_pagetable = domain_switch_get_pagetable(domain_id);
-    if (domain_pagetable == NULL) {
-        /* 域没有页表，这可能是一个错误或域 0 */
-        console_puts("[PRIMITIVES] No page table for domain ");
-        console_putu32(domain_id);
-        console_puts("\n");
-        return HIC_SUCCESS;  /* 内存已分配，但无法映射 */
-    }
-    
-    /* 确定映射权限 */
-    page_perm_t perm;
-    if (type == MODULE_PAGE_CODE) {
-        perm = PERM_RWX;  /* 代码段：可读写执行 */
-    } else if (type == MODULE_PAGE_STACK) {
-        perm = PERM_RW;   /* 栈：可读写 */
-    } else {
-        perm = PERM_RW;   /* 数据/其他：可读写 */
-    }
-    
-    /* 使用恒等映射（虚拟地址 = 物理地址） */
-    size_t map_size = (size_t)(page_count * PAGE_SIZE);
-    status = pagetable_map(domain_pagetable,
-                           (virt_addr_t)*phys_addr,  /* 虚拟地址 */
-                           *phys_addr,                /* 物理地址 */
-                           map_size,
-                           perm,
-                           MAP_TYPE_USER);
-    
-    if (status != HIC_SUCCESS) {
-        console_puts("[PRIMITIVES] Failed to map memory for domain ");
-        console_putu32(domain_id);
-        console_puts(", status=");
-        console_putu32(status);
-        console_puts("\n");
-        /* 映射失败，但物理内存已分配，返回成功让调用者处理 */
-    } else {
-        console_puts("[PRIMITIVES] Mapped ");
-        console_putu64(map_size);
-        console_puts(" bytes at 0x");
-        console_puthex64(*phys_addr);
-        console_puts(" for domain ");
-        console_putu32(domain_id);
-        console_puts("\n");
-    }
-    
+
+    /* 分配的物理内存已通过 domain.c 中的 PMM 范围恒等映射 */
     return HIC_SUCCESS;
 }
 
@@ -347,6 +308,8 @@ hic_status_t module_memory_free(domain_id_t domain_id,
     
     u32 page_count = (u32)((size + PAGE_SIZE - 1) / PAGE_SIZE);
     pmm_free_frames(phys_addr, page_count);
+    /* 释放内存配额 */
+    domain_quota_release(domain_id, QUOTA_TYPE_MEMORY, (size_t)page_count * PAGE_SIZE);
     return HIC_SUCCESS;
 }
 
@@ -720,21 +683,14 @@ hic_status_t module_audit_log(u32 event_type,
  */
 uint64_t module_cap_create_domain(uint32_t parent_domain, uint32_t *new_domain)
 {
-    domain_quota_t quota = {
-        .max_memory = 16 * 1024 * 1024,  /* 16MB - 足够加载大型模块 */
-        .max_threads = 8,
-        .max_caps = 64,
-        .cpu_quota_percent = 20
-    };
-    
-    domain_id_t domain_id;
-    hic_status_t status = domain_create(DOMAIN_TYPE_PRIVILEGED, parent_domain, &quota, &domain_id);
-    
-    if (status == HIC_SUCCESS && new_domain) {
-        *new_domain = (uint32_t)domain_id;
-    }
-    
-    return (uint64_t)status;
+    (void)parent_domain;
+
+    domain_quota_t q = { .max_memory = 0x20000, .max_threads = 4,
+                         .max_caps = 32, .cpu_quota_percent = 15 };
+    domain_id_t did;
+    hic_status_t st = domain_create(DOMAIN_TYPE_PRIVILEGED, HIC_INVALID_DOMAIN, &q, &did);
+    if (st == 0 && new_domain) *new_domain = did;
+    return (uint64_t)st;
 }
 
 /**
@@ -743,31 +699,13 @@ uint64_t module_cap_create_domain(uint32_t parent_domain, uint32_t *new_domain)
  */
 uint64_t module_cap_create_service(uint32_t domain_id, uint32_t *service_id)
 {
-    ipc3_service_id_t sid;
-    /* 使用0作为业务入口（模块将在初始化后自行设置） */
-    hic_status_t status = ipc3_register_service((domain_id_t)domain_id, 0, 0, &sid);
-
-    if (status == HIC_SUCCESS && service_id) {
-        *service_id = (uint32_t)sid;
-    }
-
-    return (uint64_t)status;
+    return (uint64_t)ipc3_register_service((domain_id_t)domain_id, 0, 0, (ipc3_service_id_t*)service_id);
 }
 
-/**
- * @brief 创建 IPC 3.0 端点
- * 用于动态模块加载器，为每个动态加载的模块创建独立的端点
- */
+/** @brief 创建 IPC 3.0 端点 */
 uint64_t module_cap_create_endpoint(uint32_t domain_id, uint32_t *endpoint_id)
 {
-    ipc3_service_id_t sid;
-    hic_status_t status = ipc3_register_service((domain_id_t)domain_id, 0, 0, &sid);
-
-    if (status == HIC_SUCCESS && endpoint_id) {
-        *endpoint_id = (uint32_t)sid;
-    }
-
-    return (uint64_t)status;
+    return (uint64_t)ipc3_register_service((domain_id_t)domain_id, 0, 0, (ipc3_service_id_t*)endpoint_id);
 }
 
 /**
@@ -777,35 +715,10 @@ uint64_t module_cap_create_endpoint(uint32_t domain_id, uint32_t *endpoint_id)
  */
 uint64_t module_domain_start(uint32_t domain_id, uint64_t entry_point)
 {
-    /* 首先创建线程 - 动态模块使用较高优先级确保被调度 */
-    thread_id_t thread_id;
-    hic_status_t status = thread_create((domain_id_t)domain_id, 
-                                         (virt_addr_t)entry_point,
-                                         3,  /* HIC_PRIORITY_HIGH - 确保被调度 */
-                                         &thread_id);
-    if (status != HIC_SUCCESS) {
-        console_puts("[PRIMITIVES] Failed to create thread for domain ");
-        console_putu32(domain_id);
-        console_puts("\n");
-        return (uint64_t)status;
-    }
-    
-    console_puts("[PRIMITIVES] Thread ");
-    console_putu32(thread_id);
-    console_puts(" created for domain ");
-    console_putu32(domain_id);
-    console_puts(" (already enqueued by thread_create)\n");
-    
-    /* 恢复域运行 */
-    status = domain_resume((domain_id_t)domain_id);
-    if (status != HIC_SUCCESS) {
-        console_puts("[PRIMITIVES] Failed to resume domain\n");
-        return (uint64_t)status;
-    }
-    
-    /* 注意：thread_create 已经将线程加入调度队列，无需再次调用 thread_ready */
-    
-    return 0;  /* 成功 */
+    thread_id_t tid;
+    hic_status_t st = thread_create((domain_id_t)domain_id, (virt_addr_t)entry_point, 3, &tid);
+    if (st != 0) return (uint64_t)st;
+    return (uint64_t)domain_resume((domain_id_t)domain_id);
 }
 
 /**

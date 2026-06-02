@@ -250,7 +250,7 @@ void kernel_main(void)
     console_puts("[BOOT] Static modules loaded: ");
     console_putu32((u32)static_loaded);
     console_puts("\n");
-    
+
     /* 【步骤11.5：初始化模块原语系统】 */
     console_puts("\n[BOOT] STEP 11.5: Initializing Module Primitives\n");
     console_puts("[BOOT] Initializing Core-0 module primitives for Privileged-1...\n");
@@ -273,29 +273,41 @@ void kernel_main(void)
     
     console_puts("[BOOT] Starting main loop, calling schedule()...\n");
 
+    console_puts("\n[HIC] Kernel boot complete - Serial Console\n");
+
+    char cmdline[128];
+    int cmdpos = 0;
+
     while (1) {
-        /* 中断直接送达服务，无需主循环轮询（精简设计） */
-
-        /* 调度器：执行上下文切换到下一个线程 */
-        thread_t *next = schedule();
-
-        /* 检查是否有可用线程 */
-        if (next == NULL) {
-            /* 无可用线程，进入空闲状态 */
-            console_puts("[BOOT] No threads ready, entering idle state\n");
-            for (volatile int i = 0; i < 1000000; i++) { /* 空闲循环 */ }
-            continue;
+        /* 串口输入轮询 */
+        char ch = 0;
+        if (minimal_uart_try_getc(&ch)) {
+            if (ch == '\r' || ch == '\n') {
+                cmdline[cmdpos] = '\0';
+                hal_uart_putc('\r'); hal_uart_putc('\n');
+                if (cmdpos > 0) {
+                    console_puts("[HIC] ");
+                    console_puts(cmdline);
+                    hal_uart_putc('\n');
+                }
+                console_puts("$ ");
+                cmdpos = 0;
+            } else if (ch == '\b' || ch == 0x7F) {
+                if (cmdpos > 0) { cmdpos--; hal_uart_putc('\b'); hal_uart_putc(' '); hal_uart_putc('\b'); }
+            } else if (ch >= ' ' && ch <= '~' && cmdpos < 127) {
+                cmdline[cmdpos++] = ch; hal_uart_putc(ch);
+            }
         }
 
-        /* 处理定时器 */
-        timer_update();
+        /* 调度服务线程 */
+        (void)schedule();
 
-        /* 执行内核维护任务 */
+        /* 定时器与维护 */
+        timer_update();
         kernel_maintenance_tasks();
 
-        /* 短暂延迟后继续调度（避免忙等待） */
-        /* 注意：在生产环境中应使用定时器中断唤醒 */
-        for (volatile int i = 0; i < 100; i++) { /* 简单延迟（优化：从1000降到100） */ }
+        /* 短暂延迟 */
+        for (volatile int i = 0; i < 5000; i++) {}
     }
     
 panic:

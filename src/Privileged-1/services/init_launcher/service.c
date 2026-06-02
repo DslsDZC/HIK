@@ -697,7 +697,6 @@ int init_launcher_init(void) {
 }
 
 int init_launcher_start(void) {
-    extern void thread_yield(void);
     uint32_t bytes_read;
     int result;
     
@@ -705,38 +704,48 @@ int init_launcher_start(void) {
     launcher_log("Service started - Loading module_manager");
     launcher_log("========================================");
     
-    /* 步骤1: 等待 FAT32 服务初始化完成 */
-    launcher_log("Step 1: Waiting for FAT32 service...");
-    
-    /* 等待更多时间让 FAT32 初始化 */
-    for (int i = 0; i < 100; i++) {
-        thread_yield();
+    /* 步骤1: FAT32 应在启动前已初始化，等待线程稳定 */
+    launcher_log("Step 1: Brief delay for service threads...");
+
+    /* 简单延迟（自旋等待，避免 thread_yield 触发调度器问题） */
+    for (volatile int i = 0; i < 500000; i++) {
+        __asm__ volatile("pause");
     }
     
         /* 步骤2: 读取模块管理器 */
         launcher_log("Step 2: Reading module_manager.hicmod...");
         
-        /* 使用 FAT32 8.3 短文件名格式 */
-        const char *module_path = "/modules/MODULE~1.HIC";  /* module_manager_service.hicmod */
-        
-        result = fat32_read_file(module_path, g_module_buffer, 
-                             MAX_MODULE_SIZE, &bytes_read);    
+        /* 优先使用长文件名，后续短文件名回退 */
+        const char *module_path = "/modules/module_manager_service.hicmod";
+
+        result = fat32_read_file(module_path, g_module_buffer,
+                             MAX_MODULE_SIZE, &bytes_read);
+
     if (result != 0 || bytes_read == 0) {
-        launcher_log("ERROR: Failed to read module_manager.hicmod");
-        launcher_log("Trying alternate path...");
-        
-        /* 尝试备用路径 */
-        module_path = "/MODULE~1.HIC";  /* 短文件名 */
+        launcher_log("Long filename not found, trying 8.3 short name...");
+
+        /* 尝试 FAT32 8.3 短文件名格式 */
+        module_path = "/modules/MODULE~1.HIC";
         result = fat32_read_file(module_path, g_module_buffer,
                                  MAX_MODULE_SIZE, &bytes_read);
-        
+
         if (result != 0 || bytes_read == 0) {
-            launcher_log("ERROR: Module manager not found on disk");
-            launcher_log("Entering idle mode (services already running)");
-            
-            /* 进入空闲模式 - 静态服务已经运行 */
-            while (1) {
-                thread_yield();
+            launcher_log("ERROR: Failed to read module_manager.hicmod");
+            launcher_log("Trying root path...");
+
+            /* 尝试根目录短文件名路径 */
+            module_path = "/MODULE~1.HIC";
+            result = fat32_read_file(module_path, g_module_buffer,
+                                     MAX_MODULE_SIZE, &bytes_read);
+
+            if (result != 0 || bytes_read == 0) {
+                launcher_log("ERROR: Module manager not found on disk");
+                launcher_log("Entering idle mode (services already running)");
+
+                /* 进入空闲模式 - 静态服务已经运行 */
+                while (1) {
+                    __asm__ volatile("hlt"); /* 避免调度器切换导致的崩溃 */
+                }
             }
         }
     }
@@ -766,7 +775,7 @@ int init_launcher_start(void) {
         
         /* 进入空闲模式 */
         while (1) {
-            thread_yield();
+            __asm__ volatile("hlt"); /* 避免调度器切换导致的崩溃 */
         }
     }
     
@@ -795,7 +804,7 @@ int init_launcher_start(void) {
     
     if (status != 0) {
         launcher_log("ERROR: Failed to create domain");
-        while (1) { thread_yield(); }
+        while (1) { __asm__ volatile("hlt"); /* 避免调度器切换导致的崩溃 */ }
     }
     
     launcher_log("Domain created");
@@ -808,26 +817,24 @@ int init_launcher_start(void) {
 
     if (status != 0) {
         launcher_log("ERROR: Failed to create service");
-        while (1) { thread_yield(); }
+        while (1) { __asm__ volatile("hlt"); /* 避免调度器切换导致的崩溃 */ }
     }
 
     launcher_log("Service created");
     
     /* 步骤7: 分配内存并加载模块 */
+    /* 步骤7: 分配内存并加载模块代码 */
     launcher_log("Step 7: Loading module code...");
-    
-    /* 从架构表中读取代码大小和入口偏移 */
-    /* 架构表紧随头部之后 */
+
     hicmod_arch_section_t *arch_section = (hicmod_arch_section_t *)
         (g_module_buffer + header->arch_table_offset);
-    
+
     uint32_t code_offset = arch_section->code_offset;
     uint32_t code_size = arch_section->code_size;
     uint32_t entry_offset = arch_section->entry_offset;
     uint32_t data_size = arch_section->data_size;
     uint32_t total_size = code_size + data_size;
-    
-    /* 如果使用 legacy 字段，优先使用它们 */
+
     if (header->legacy_code_size > 0) {
         code_offset = header->legacy_code_offset;
         code_size = header->legacy_code_size;
@@ -835,86 +842,49 @@ int init_launcher_start(void) {
         total_size = code_size + data_size;
         launcher_log("Using legacy code fields from header");
     }
-    
-    launcher_log("Module sizes:");
-    launcher_log_hex(" code=", code_size);
-    launcher_log_hex(", data=", data_size);
-    launcher_log_hex(", total=", total_size);
-    launcher_log_hex(" code_offset=", code_offset);
-    launcher_log("\n");
-    
-    /* 对齐到页 */
+
     total_size = (total_size + 4095) & ~4095U;
-    
-    /* 分配内存 */
+
     uint64_t phys_addr = 0;
-    status = module_memory_alloc(new_domain, total_size, 0, &phys_addr);  /* type=0=CODE */
-    
+    status = module_memory_alloc(new_domain, total_size, 0, &phys_addr);
     if (status != 0 || phys_addr == 0) {
         launcher_log("ERROR: Failed to allocate memory");
-        while (1) { thread_yield(); }
+        while (1) { __asm__ volatile("hlt"); }
     }
-    
-    launcher_log("Memory allocated at physical address");
-    launcher_log_hex("phys: ", phys_addr);
-    
-    /* 复制代码段 - 使用 arch_section 中的偏移 */
-    module_memcpy((void *)phys_addr, g_module_buffer + code_offset, code_size);
-    
+    module_memcpy((void*)(uintptr_t)phys_addr, g_module_buffer + code_offset, code_size);
     launcher_log("Code loaded to physical memory");
-    
+
     /* 步骤7.5: 应用 ELF 重定位 */
     launcher_log("Step 7.5: Applying ELF relocations...");
-    
-    int reloc_result = apply_elf_relocations((uint8_t *)phys_addr, code_size);
-    if (reloc_result != 0) {
+    int reloc_result = apply_elf_relocations((uint8_t*)(uintptr_t)phys_addr, code_size);
+    if (reloc_result != 0)
         launcher_log_hex("WARNING: Relocation had errors: ", reloc_result);
-        /* 继续执行，某些重定位错误可能是可以忽略的 */
-    } else {
+    else
         launcher_log("Relocations applied successfully");
-    }
-    
+
     /* 步骤8: 启动模块管理器 */
     launcher_log("Step 8: Starting module_manager...");
-    
-    /* 从 ELF 符号表查找真正的入口函数 */
     uint64_t elf_entry_offset = 0;
-    int found_entry = find_elf_entry_ex((const uint8_t *)phys_addr, code_size, &elf_entry_offset);
-    
     uint64_t entry_point;
-    uint64_t final_entry_offset;
-    if (found_entry) {
-        /* 使用 ELF 符号表中找到的入口点（即使偏移是 0 也是有效的） */
+    if (find_elf_entry_ex((const uint8_t*)(uintptr_t)phys_addr, code_size, &elf_entry_offset))
         entry_point = phys_addr + elf_entry_offset;
-        final_entry_offset = elf_entry_offset;
-        launcher_log("Found ELF entry point from symbol table");
-    } else {
-        /* 回退到 arch_section 中的 entry_offset */
+    else
         entry_point = phys_addr + entry_offset;
-        final_entry_offset = entry_offset;
-        launcher_log("Using arch_section entry_offset (fallback)");
-    }
-    
-    launcher_log_hex("Entry point (phys): ", entry_point);
-    launcher_log_hex("Entry offset: ", final_entry_offset);
-    
+    launcher_log_hex("Entry point: ", entry_point);
+
     status = module_domain_start(new_domain, entry_point);
-    
     if (status != 0) {
         launcher_log("ERROR: Failed to start module");
-        while (1) { thread_yield(); }
+        while (1) { __asm__ volatile("hlt"); }
     }
-    
-    launcher_log("========================================");
     launcher_log(">>> Module manager started successfully <<<");
-    launcher_log("========================================");
     
     g_launcher_ctx.module_manager_loaded = 1;
     g_launcher_ctx.module_manager_domain = new_domain;
     
     /* 等待 module_manager 初始化 */
     for (int i = 0; i < 1000; i++) {
-        thread_yield();
+        __asm__ volatile("hlt"); /* 避免调度器切换导致的崩溃 */
     }
     
     launcher_log("Init launcher entering idle mode");
@@ -923,7 +893,7 @@ int init_launcher_start(void) {
     /* 主服务循环 - 提供简单的命令行交互 */
     int count = 0;
     while (1) {
-        thread_yield();
+        __asm__ volatile("hlt"); /* 避免调度器切换导致的崩溃 */
         count++;
         
         /* 每 10000000 次循环打印一次心跳 */

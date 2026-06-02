@@ -183,6 +183,12 @@ SECTIONS
         KEEP(*(.static_svc.init_launcher.rodata))
         __stop_static_svc_init_launcher_text = .;
 
+        /* module_manager_service 服务段 */
+        __start_static_svc_module_manager_service_text = .;
+        KEEP(*(.static_svc.module_manager_service.text))
+        KEEP(*(.static_svc.module_manager_service.rodata))
+        __stop_static_svc_module_manager_service_text = .;
+
         /* @STATIC_MODULES_TEXT_END@ */
         
         /* 通配符匹配其他静态服务段（仅文本和只读数据） */
@@ -228,6 +234,10 @@ SECTIONS
         __start_static_svc_init_launcher_data = .;
         KEEP(*(.static_svc.init_launcher.data))
         __stop_static_svc_init_launcher_data = .;
+
+        __start_static_svc_module_manager_service_data = .;
+        KEEP(*(.static_svc.module_manager_service.data))
+        __stop_static_svc_module_manager_service_data = .;
 
         /* @STATIC_MODULES_DATA_END@ */
         

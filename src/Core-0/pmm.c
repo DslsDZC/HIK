@@ -17,7 +17,7 @@
 /* 动态页帧位图 */
 static u8 *frame_bitmap = NULL;
 static u64 max_frames = 0;          /* 位图可管理的最大帧数 */
-static u64 usable_max_frame = 0;    /* 实际可用物理内存的最高帧索引 */
+u64 usable_max_frame = 0;    /* 实际可用物理内存的最高帧索引（非static，供 domain.c 引用）*/
 static u64 total_frames = 0;        /* 累计添加的可用帧数 */
 static u64 free_frames = 0;         /* 当前空闲帧数 */
 
@@ -258,15 +258,25 @@ hic_status_t pmm_add_region(phys_addr_t base, size_t size)
 hic_status_t pmm_alloc_frames(domain_id_t owner, u32 count,
                                page_frame_type_t type, phys_addr_t *out)
 {
-    (void)owner;
-    (void)type;
+    /* 验证所有者域 ID 有效 */
+    if (owner >= HIC_DOMAIN_MAX) {
+        return HIC_ERROR_INVALID_PARAM;
+    }
+    /* 验证页帧类型有效 */
+    if (type >= PAGE_FRAME_SHARED && type != PAGE_FRAME_SHARED) {
+        return HIC_ERROR_INVALID_PARAM;
+    }
     if (count == 0 || out == NULL) {
         return HIC_ERROR_INVALID_PARAM;
     }
-    
+
     console_puts("[PMM] Allocating ");
     console_putu64(count);
-    console_puts(" frames, usable_max_frame=");
+    console_puts(" frames for owner ");
+    console_putu64(owner);
+    console_puts(" type ");
+    console_putu64(type);
+    console_puts(", usable_max_frame=");
     console_putu64(usable_max_frame);
     console_puts(", free_frames=");
     console_putu64(free_frames);
@@ -312,6 +322,7 @@ hic_status_t pmm_alloc_frames(domain_id_t owner, u32 count,
         set_bit(frame_bitmap, start + i);
     }
     
+    *out = start * PAGE_SIZE;
     free_frames -= count;
     g_used_memory += count * PAGE_SIZE;
     
@@ -324,9 +335,15 @@ hic_status_t pmm_alloc_frames(domain_id_t owner, u32 count,
 hic_status_t pmm_alloc_scattered(domain_id_t owner, u32 count,
                                   page_frame_type_t type, phys_addr_t *pages)
 {
-    (void)owner;
-    (void)type;
-    
+    /* 验证所有者域 ID 有效 */
+    if (owner >= HIC_DOMAIN_MAX) {
+        return HIC_ERROR_INVALID_PARAM;
+    }
+    /* 验证页帧类型有效 */
+    if (type >= PAGE_FRAME_SHARED && type != PAGE_FRAME_SHARED) {
+        return HIC_ERROR_INVALID_PARAM;
+    }
+
     if (count == 0 || pages == NULL) {
         return HIC_ERROR_INVALID_PARAM;
     }
@@ -379,7 +396,12 @@ hic_status_t pmm_free_frames(phys_addr_t addr, u32 count)
     if (start_frame >= max_frames || count == 0) {
         return HIC_ERROR_INVALID_PARAM;
     }
-    
+    /* 检查释放范围是否超出位图边界 */
+    if ((u64)start_frame + count > max_frames) {
+        console_puts("[PMM] ERROR: free range exceeds bitmap boundary\n");
+        return HIC_ERROR_INVALID_PARAM;
+    }
+
     /* 检查页帧是否已分配 */
     for (u32 i = 0; i < count; i++) {
         if (!test_bit(frame_bitmap, start_frame + i)) {

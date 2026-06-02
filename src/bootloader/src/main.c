@@ -12,7 +12,6 @@
 
 #include "efi.h"
 #include "boot_info.h"
-#include "kernel_image.h"
 #include "hardware_probe.h"
 #include "console.h"
 #include "string.h"
@@ -102,7 +101,7 @@ extern uint32_t get_embedded_platform_config_size(void);
 static BOOLEAN g_debug_mode = FALSE;
 
 // 内核路径
-__attribute__((unused)) static CHAR16 gKernelPath[] = L"\\EFI\\HIC\\kernel.hic";
+__attribute__((unused)) static CHAR16 gKernelPath[] = L"\\EFI\\HIC\\kernel.bin";
 __attribute__((unused)) static CHAR16 gPlatformPath[] = L"\\EFI\\HIC\\platform.yaml";
 
 // 函数前置声明
@@ -680,7 +679,7 @@ EFI_STATUS load_kernel_image(void **kernel_data, uint64_t *kernel_size)
     }
     
     // 使用默认内核路径
-    utf8_to_utf16("\\hic-kernel.hic", kernel_path, 256);
+    utf8_to_utf16("\\hic-kernel.bin", kernel_path, 256);
     
     // 打开卷的根目录
     EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs;
@@ -991,14 +990,8 @@ hic_boot_info_t *prepare_boot_info(void *kernel_data, uint64_t kernel_size)
         // ELF 格式：从 ELF header 读取入口点（偏移 24，8 字节）
         kernel_entry_point = *((uint64_t*)(raw_kernel + 24));
         console_printf("[BOOTLOADER] Detected ELF format, entry_point=0x%lx\n", kernel_entry_point);
-    } else if (kernel_size >= 8 && memcmp(raw_kernel, "HIC_IMG", 8) == 0) {
-        // HIK 格式：从 HIK header 读取入口点偏移（偏移 12，8 字节）
-        uint64_t entry_offset = *((uint64_t*)(raw_kernel + 12));
-        kernel_entry_point = 0x100000 + entry_offset;
-        console_printf("[BOOTLOADER] Detected HIC format, entry_offset=0x%lx, entry_point=0x%lx\n", 
-                     entry_offset, kernel_entry_point);
     } else {
-        console_puts("[BOOTLOADER] WARNING: Unknown kernel format, using default entry_point=0x100000\n");
+        console_puts("[BOOTLOADER] Using default entry_point=0x100000 (raw binary)\n");
         kernel_entry_point = 0x100000;
     }
     
@@ -1310,186 +1303,6 @@ EFI_STATUS load_kernel_segments(void *image_data, uint64_t image_size,
         boot_info->entry_point = entry_point;
         
         console_puts("[BOOTLOADER] ELF kernel loaded\n");
-        
-    } else if (image_size >= 8 && memcmp(raw_bytes, HIC_IMG_MAGIC, 8) == 0) {
-        console_puts("[BOOTLOADER] Detected HIC image format\n");
-        
-        // 手动读取HIC镜像头部字段
-        uint64_t entry_point = *((uint64_t*)(raw_bytes + 12));
-        uint64_t manual_image_size = *((uint64_t*)(raw_bytes + 20));
-        uint64_t header_size = *((uint64_t*)(raw_bytes + 28));
-        uint64_t segment_count = *((uint64_t*)(raw_bytes + 36));
-        
-        console_printf("[BOOTLOADER] HIC header: entry=0x%lx, size=%lu, header_size=%lu, seg_count=%lu\n",
-                      entry_point, manual_image_size, header_size, segment_count);
-        
-        console_puts("[BOOTLOADER] HIC image loaded\n");
-        
-        // 计算内核代码在HIC镜像中的偏移量
-        // HIC镜像格式: header(120) + segment_table(160) + kernel_code
-        // kernel_code 从偏移 280 开始
-        uint64_t kernel_offset = 280;
-        uint64_t kernel_code_size = manual_image_size - kernel_offset;
-        
-        console_printf("[BOOTLOADER] kernel_offset=%d, kernel_code_size=%d\n", 
-                      (int)kernel_offset, (int)kernel_code_size);
-        
-        // 将内核代码复制到物理地址0x100000
-        void *kernel_phys_base = (void*)0x100000;
-        void *kernel_code_start = (void*)(raw_bytes + kernel_offset);
-        
-        console_printf("[BOOTLOADER] raw_bytes=0x%lx\n", (uint64_t)raw_bytes);
-        console_printf("[BOOTLOADER] kernel_code_start=0x%lx\n", (uint64_t)kernel_code_start);
-        
-        // DEBUG: 显示源代码前几个字节
-        console_puts("[BOOTLOADER] Source kernel code (first 8 bytes):\n");
-        uint8_t *src_ptr = (uint8_t*)kernel_code_start;
-        for (int i = 0; i < 8; i++) {
-            char hex[4];
-            snprintf(hex, sizeof(hex), "%02X ", src_ptr[i]);
-            console_puts(hex);
-        }
-        console_puts("\n");
-        
-        memcpy(kernel_phys_base, kernel_code_start, kernel_code_size);
-        
-        // DEBUG: 显示目标代码前几个字节
-        console_puts("[BOOTLOADER] Destination kernel code (first 8 bytes):\n");
-        uint8_t *dst_ptr = (uint8_t*)kernel_phys_base;
-        for (int i = 0; i < 8; i++) {
-            char hex[4];
-            snprintf(hex, sizeof(hex), "%02X ", dst_ptr[i]);
-            console_puts(hex);
-        }
-        console_puts("\n");
-        
-        console_puts("[BOOTLOADER] Kernel code copied to 0x100000\n");
-        
-        // 解析段表并初始化BSS段
-        uint64_t segment_table_offset = 120;  // 段表偏移（头部大小）
-            uint8_t *segment_table = raw_bytes + segment_table_offset;        
-        console_printf("[BOOTLOADER] Segment count: %lu\n", segment_count);
-        
-        // 遍历段表，初始化BSS段
-        // 使用字节级读取避免对齐问题
-        for (uint64_t i = 0; i < segment_count; i++) {
-            uint8_t *seg_entry = segment_table + (i * 40);  // 每个段表项40字节
-            
-            // 手动字节级读取（小端字节序）
-            uint32_t seg_type = (uint32_t)seg_entry[0] | 
-                               ((uint32_t)seg_entry[1] << 8) | 
-                               ((uint32_t)seg_entry[2] << 16) | 
-                               ((uint32_t)seg_entry[3] << 24);
-            
-            uint32_t seg_flags = (uint32_t)seg_entry[4] | 
-                                ((uint32_t)seg_entry[5] << 8) | 
-                                ((uint32_t)seg_entry[6] << 16) | 
-                                ((uint32_t)seg_entry[7] << 24);
-            
-            uint64_t seg_file_offset = (uint64_t)seg_entry[8] | 
-                                      ((uint64_t)seg_entry[9] << 8) | 
-                                      ((uint64_t)seg_entry[10] << 16) | 
-                                      ((uint64_t)seg_entry[11] << 24) |
-                                      ((uint64_t)seg_entry[12] << 32) | 
-                                      ((uint64_t)seg_entry[13] << 40) | 
-                                      ((uint64_t)seg_entry[14] << 48) | 
-                                      ((uint64_t)seg_entry[15] << 56);
-            
-            uint64_t seg_memory_offset = (uint64_t)seg_entry[16] | 
-                                        ((uint64_t)seg_entry[17] << 8) | 
-                                        ((uint64_t)seg_entry[18] << 16) | 
-                                        ((uint64_t)seg_entry[19] << 24) |
-                                        ((uint64_t)seg_entry[20] << 32) | 
-                                        ((uint64_t)seg_entry[21] << 40) | 
-                                        ((uint64_t)seg_entry[22] << 48) | 
-                                        ((uint64_t)seg_entry[23] << 56);
-            
-            uint64_t seg_file_size = (uint64_t)seg_entry[24] |
-                                    ((uint64_t)seg_entry[25] << 8) |
-                                    ((uint64_t)seg_entry[26] << 16) |
-                                    ((uint64_t)seg_entry[27] << 24) |
-                                    ((uint64_t)seg_entry[28] << 32) |
-                                    ((uint64_t)seg_entry[29] << 40) |
-                                    ((uint64_t)seg_entry[30] << 48) |
-                                    ((uint64_t)seg_entry[31] << 56);
-
-            uint64_t seg_memory_size = (uint64_t)seg_entry[32] |
-                                       ((uint64_t)seg_entry[33] << 8) |
-                                       ((uint64_t)seg_entry[34] << 16) |
-                                       ((uint64_t)seg_entry[35] << 24) |
-                                       ((uint64_t)seg_entry[36] << 32) |
-                                       ((uint64_t)seg_entry[37] << 40) |
-                                       ((uint64_t)seg_entry[38] << 48) |
-                                       ((uint64_t)seg_entry[39] << 56);
-
-            (void)seg_flags;  // 消除未使用变量警告
-            
-            console_printf("[BOOTLOADER] Segment %lu: type=%u, flags=0x%x, mem_offset=0x%lx, file_offset=0x%lx, file_size=0x%lx, mem_size=0x%lx\n",
-                         i, seg_type, seg_flags, seg_memory_offset, seg_file_offset, seg_file_size, seg_memory_size);
-            
-            // 加载非BSS段（代码段、数据段等）到内存
-            if (seg_type != 4 && seg_file_size > 0) {
-                console_printf("[BOOTLOADER] Loading segment %lu to 0x%lx, size=0x%lx\n",
-                             i, seg_memory_offset, seg_file_size);
-                memcpy((void*)seg_memory_offset, raw_bytes + seg_file_offset, seg_file_size);
-                console_printf("[BOOTLOADER] Segment %lu loaded\n", i);
-            }
-            
-            // 如果是BSS段，初始化为零
-            if (seg_type == 4 && seg_memory_size > seg_file_size) {
-                console_printf("[BOOTLOADER] Initializing BSS segment at 0x%lx, size=0x%lx\n",
-                             seg_memory_offset, seg_memory_size - seg_file_size);
-                memset((void*)seg_memory_offset, 0, seg_memory_size - seg_file_size);
-                console_puts("[BOOTLOADER] BSS segment initialized\n");
-            }
-        }
-        
-        // 调试：检查源数据的前几个字节（在跳转到内核之前）
-        console_puts("[BOOTLOADER] NEW CODE: Checking source kernel data...\n");
-        uint8_t *kernel_code_ptr = (uint8_t*)kernel_code_start;
-        
-        // 调试：输出 raw_bytes 的前几个字节
-        console_puts("[BOOTLOADER] raw_bytes[0]: ");
-        for (int i = 0; i < 8; i++) {
-            uint8_t b = ((uint8_t*)raw_bytes)[i];
-            char high = "0123456789ABCDEF"[(b >> 4) & 0x0F];
-            char low = "0123456789ABCDEF"[b & 0x0F];
-            console_putchar(high);
-            console_putchar(low);
-            console_putchar(' ');
-        }
-        console_putchar('\n');
-        
-        // 调试：输出 raw_bytes + 160 的前几个字节
-        console_puts("[BOOTLOADER] raw_bytes+160: ");
-        for (int i = 0; i < 8; i++) {
-            uint8_t b = ((uint8_t*)raw_bytes)[160 + i];
-            char high = "0123456789ABCDEF"[(b >> 4) & 0x0F];
-            char low = "0123456789ABCDEF"[b & 0x0F];
-            console_putchar(high);
-            console_putchar(low);
-            console_putchar(' ');
-        }
-        console_putchar('\n');
-        
-        // 调试：输出 kernel_code_ptr 的前几个字节
-        console_puts("[BOOTLOADER] kernel_code_ptr: ");
-        for (int i = 0; i < 8; i++) {
-            uint8_t b = kernel_code_ptr[i];
-            char high = "0123456789ABCDEF"[(b >> 4) & 0x0F];
-            char low = "0123456789ABCDEF"[b & 0x0F];
-            console_putchar(high);
-            console_putchar(low);
-            console_putchar(' ');
-        }
-        console_putchar('\n');
-        
-        // 更新启动信息
-        boot_info->kernel_base = kernel_phys_base;
-        boot_info->kernel_size = manual_image_size;
-        boot_info->entry_point = 0x100000 + entry_point;  // 入口点偏移 + 加载基地址
-        
-        console_puts("[BOOTLOADER] Entry point loaded from HIC image\n");
         
     } else {
         // 纯二进制格式，直接复制

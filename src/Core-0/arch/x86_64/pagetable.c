@@ -161,9 +161,9 @@ hic_status_t pagetable_map(page_table_t* root, virt_addr_t virt, phys_addr_t phy
     }
     
     /* 对齐到页边界 */
-    virt_addr_t virt_aligned = PAGE_ALIGN_UP(virt, PAGE_SIZE_4K);
-    phys_addr_t phys_aligned = PAGE_ALIGN_UP(phys, PAGE_SIZE_4K);
-    size_t size_aligned = PAGE_ALIGN_UP(size, PAGE_SIZE_4K);
+    virt_addr_t virt_aligned = PAGE_ALIGN_UP(virt, PAGE_SIZE);
+    phys_addr_t phys_aligned = PAGE_ALIGN_UP(phys, PAGE_SIZE);
+    size_t size_aligned = PAGE_ALIGN_UP(size, PAGE_SIZE);
     
     /* 设置权限标志 */
     u64 flags = perm;
@@ -174,7 +174,7 @@ hic_status_t pagetable_map(page_table_t* root, virt_addr_t virt, phys_addr_t phy
     }
     
     /* 逐页映射 */
-    for (size_t offset = 0; offset < size_aligned; offset += PAGE_SIZE_4K) {
+    for (size_t offset = 0; offset < size_aligned; offset += PAGE_SIZE) {
         virt_addr_t current_virt = virt_aligned + offset;
         phys_addr_t current_phys = phys_aligned + offset;
         
@@ -238,11 +238,11 @@ hic_status_t pagetable_unmap(page_table_t* root, virt_addr_t virt, size_t size)
     }
     
     /* 对齐到页边界 */
-    virt_addr_t virt_aligned = PAGE_ALIGN_UP(virt, PAGE_SIZE_4K);
-    size_t size_aligned = PAGE_ALIGN_UP(size, PAGE_SIZE_4K);
+    virt_addr_t virt_aligned = PAGE_ALIGN_UP(virt, PAGE_SIZE);
+    size_t size_aligned = PAGE_ALIGN_UP(size, PAGE_SIZE);
     
     /* 逐页取消映射 */
-    for (size_t offset = 0; offset < size_aligned; offset += PAGE_SIZE_4K) {
+    for (size_t offset = 0; offset < size_aligned; offset += PAGE_SIZE) {
         virt_addr_t current_virt = virt_aligned + offset;
         
         /* 获取各级索引 */
@@ -285,11 +285,11 @@ hic_status_t pagetable_set_perm(page_table_t* root, virt_addr_t virt,
     }
     
     /* 对齐到页边界 */
-    virt_addr_t virt_aligned = PAGE_ALIGN_UP(virt, PAGE_SIZE_4K);
-    size_t size_aligned = PAGE_ALIGN_UP(size, PAGE_SIZE_4K);
+    virt_addr_t virt_aligned = PAGE_ALIGN_UP(virt, PAGE_SIZE);
+    size_t size_aligned = PAGE_ALIGN_UP(size, PAGE_SIZE);
     
     /* 逐页更改权限 */
-    for (size_t offset = 0; offset < size_aligned; offset += PAGE_SIZE_4K) {
+    for (size_t offset = 0; offset < size_aligned; offset += PAGE_SIZE) {
         virt_addr_t current_virt = virt_aligned + offset;
         
         /* 获取各级索引 */
@@ -412,4 +412,11 @@ void pagetable_cleanup_domain(domain_id_t domain)
         pagetable_destroy(pagetable);
         domain_switch_set_pagetable(domain, NULL);
     }
+}
+
+page_table_t *pagetable_get_current(void)
+{
+    u64 cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    return (page_table_t *)(cr3 & ~0xFFFULL);
 }

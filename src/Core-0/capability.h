@@ -27,7 +27,7 @@
 #include <stdbool.h>
 
 /* 能力表大小 - 优化以减少内核BSS段大小 */
-#define CAP_TABLE_SIZE     2048   /* 从65536减小到2048，满足形式化验证要求 */
+#define CAP_TABLE_SIZE     8192   /* 满足多服务启动需求 */
 
 /* 内存权限标志 */
 #define CAP_MEM_READ   (1U << 0)
@@ -47,7 +47,7 @@
 typedef u32 cap_rights_t;
 
 /* Per-core slot 分区：每个核独占一段 cap_id，无需全局锁 */
-#define CAP_SLOTS_PER_CORE   64
+#define CAP_SLOTS_PER_CORE   256
 #define CAP_MAX_CORES        (CAP_TABLE_SIZE / CAP_SLOTS_PER_CORE)
 /* 每个核的槽位范围: [core_id * CAP_SLOTS_PER_CORE, (core_id+1) * CAP_SLOTS_PER_CORE) */
 
@@ -988,5 +988,8 @@ void cap_cache_update(domain_id_t domain, cptr_t cptr,
  * @param cptr 能力指针（CPTR_INVALID 表示全部）
  */
 void cap_cache_invalidate(domain_id_t domain, cptr_t cptr);
+
+/* 获取 CNode 块的尾部空闲区（供 domain_create 零栈临时存储） */
+void* cnode_tail_scratch(cnode_t *cnode, u16 nslots);
 
 #endif /* HIC_KERNEL_CAPABILITY_H */

@@ -1,0 +1,105 @@
+ARCH ?= x86_64
+CC = gcc
+LD = gcc
+OBJCOPY = objcopy
+ROOT = $(CURDIR)
+CORE0 = $(ROOT)/src/Core-0
+P1DIR = $(ROOT)/src/Privileged-1
+BUILD = $(O)
+CFLAGS = -ffreestanding -nostdlib -fno-stack-protector -fno-builtin \
+         -fno-pie \
+         -m64 -mno-red-zone -mcmodel=small \
+         -Wall -Wextra -Wno-unused-parameter \
+         -I$(CORE0) -I$(CORE0)/include -I$(CORE0)/lib -I$(CORE0)/arch/x86_64 \
+         -I$(P1DIR)/include -DCONFIG_MMU=1 -DCONFIG_DEBUG=1
+CORE_SRC = $(wildcard $(CORE0)/*.c)
+LIB_SRC  = $(wildcard $(CORE0)/lib/*.c)
+ARCH_C   = $(filter-out %/gen_tlv.c, $(wildcard $(CORE0)/arch/x86_64/*.c))
+ARCH_S   = $(wildcard $(CORE0)/arch/x86_64/*.S)
+STATIC_MOD_GEN = $(BUILD)/static_modules_gen.c
+STATIC_SERVICES := $(shell python3 -c "import yaml; c=yaml.safe_load(open('$(ROOT)/platform.yaml')); print(' '.join([m['name'] for m in c.get('static_modules',[]) if 'name' in m]))" 2>/dev/null || echo "")
+P1_SRCS = $(foreach s,$(STATIC_SERVICES),$(wildcard $(P1DIR)/services/$(s)/service.c))
+CORE_OBJ = $(addprefix $(BUILD)/, $(notdir $(CORE_SRC:.c=.o)))
+LIB_OBJ  = $(addprefix $(BUILD)/, $(notdir $(LIB_SRC:.c=.o)))
+ARCH_OBJ = $(addprefix $(BUILD)/a_, $(notdir $(ARCH_C:.c=.o)))
+ASM_OBJ  = $(foreach f,$(ARCH_S),$(BUILD)/asm_$(notdir $(basename $f)).o)
+P1_OBJ   = $(addprefix $(BUILD)/p1_, $(STATIC_SERVICES:=.o)) $(STATIC_MOD_GEN:.c=.o)
+TARGET = $(BUILD)/hic-kernel.elf
+BIN    = $(BUILD)/hic-kernel.bin
+
+TLV = $(BUILD)/tlv.bin
+TLV_SRC = $(CORE0)/arch/x86_64/gen_tlv.c
+
+all: $(BIN) $(TLV) p1-modules
+
+$(BUILD)/%.o: $(CORE0)/%.c ; mkdir -p $(BUILD) && $(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/%.o: $(CORE0)/lib/%.c ; mkdir -p $(BUILD) && $(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/a_%.o: $(CORE0)/arch/x86_64/%.c ; mkdir -p $(BUILD) && $(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/asm_%.o: $(CORE0)/arch/x86_64/%.S ; mkdir -p $(BUILD) && $(CC) $(CFLAGS) -c $< -o $@
+$(STATIC_MOD_GEN): $(ROOT)/platform.yaml $(ROOT)/scripts/generate_static_modules.py
+	python3 $(ROOT)/scripts/generate_static_modules.py $(ROOT)/platform.yaml $@ $(P1DIR)/services || { echo "Warning: yaml module not available, skipping static modules"; touch $@; }
+$(BUILD)/static_modules_gen.o: $(STATIC_MOD_GEN) ; $(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/p1_%.o: $(P1DIR)/services/%/service.c $(STATIC_MOD_GEN)
+	mkdir -p $(BUILD) && $(CC) $(CFLAGS) -c $< -o $@
+$(TARGET): $(CORE_OBJ) $(LIB_OBJ) $(ARCH_OBJ) $(ASM_OBJ) $(P1_OBJ)
+	$(LD) -nostdlib -no-pie -Wl,-T,$(CORE0)/arch/x86_64/linker.ld $^ -o $@
+$(BIN): $(TARGET) ; $(OBJCOPY) -O binary $< $@
+
+$(TLV): $(TLV_SRC) ; gcc -o $(BUILD)/gen_tlv $< && $(BUILD)/gen_tlv > $@
+
+# Privileged-1 模块路径
+P1_MODULES_DIR = $(BUILD)/privileged-1/modules
+P1_OBJ_DIR = $(BUILD)/privileged-1/obj
+
+# 需要构建的 Privileged-1 动态模块列表
+P1_NEEDED_MODULES := module_manager_service
+
+# 共享的 CFLAGS 用于 Privileged-1 模块编译
+P1_CFLAGS := -Wall -Wextra -O2 -fPIC -ffreestanding -nostdinc \
+	-I$(ROOT)/src/Privileged-1/include \
+	-I$(ROOT)/src/Core-0/include -I$(ROOT)/src/Core-0
+
+# 构建 Privileged-1 模块（.hicmod 文件）
+# 逐个编译所需模块，避免全量构建失败
+.PHONY: p1-modules
+p1-modules:
+	@mkdir -p $(P1_MODULES_DIR) $(P1_OBJ_DIR)
+	$(foreach m,$(P1_NEEDED_MODULES),\
+		$(MAKE) -C $(P1DIR)/services/$(m) module \
+			OBJ_DIR=$(ROOT)/$(P1_OBJ_DIR) MOD_DIR=$(ROOT)/$(P1_MODULES_DIR) \
+			ROOT_DIR=$(ROOT) CC=gcc \
+			CFLAGS="$(P1_CFLAGS) -I." \
+			LDFLAGS="" \
+		&& echo "  ✓ $(m).hicmod built" \
+		|| echo "  ✗ $(m).hicmod build FAILED (non-fatal)"; \
+	)
+
+# UEFI 引导程序路径（需提前构建：cd src/bootloader && make uefi）
+bootloader_efi = src/bootloader/bin/bootx64.efi
+
+EFI_DISK = $(BUILD)/hic-disk.img
+
+$(EFI_DISK): $(BIN) p1-modules
+	python3 scripts/create_efi_disk_no_root.py \
+		--bootloader $(bootloader_efi) \
+		--kernel $(BIN) \
+		--modules-dir $(P1_MODULES_DIR) \
+		--output $@
+
+# 运行 QEMU 并挂载磁盘（完整启动流程）
+img-run: $(TARGET) $(TLV) $(EFI_DISK)
+	qemu-system-x86_64 -machine pc -m 2G -nographic -serial mon:stdio \
+		-device loader,addr=0x50000000,file=$(TLV),force-raw=on \
+		-drive file=$(EFI_DISK),if=ide,format=raw \
+		-kernel $(TARGET)
+
+# 仅运行 QEMU（无磁盘模块，原始模式）
+run: $(TARGET) $(TLV)
+	qemu-system-x86_64 -machine q35 -m 2G -nographic -serial mon:stdio \
+		-device loader,addr=0x50000000,file=$(TLV),force-raw=on \
+		-kernel $(TARGET)
+
+clean:
+	rm -f $(BUILD)/*.o $(BUILD)/*.d $(TARGET) $(BIN) $(BUILD)/*.map
+	rm -f $(EFI_DISK)
+	rm -rf $(BUILD)/privileged-1

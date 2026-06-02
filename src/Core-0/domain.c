@@ -62,14 +62,14 @@ void domain_system_init(void)
     console_puts(" domains marked as INIT\n");
     
     console_puts("[Domain] Step 3: Creating Core-0 domain...\n");
-    domain_quota_t core_quota = {
-        .max_memory = 0x100000,      /* 1MB */
+    static const domain_quota_t core_quota = {
+        .max_memory = 0x4000000,      /* 64MB — 为动态模块预留足够配额 */
         .max_threads = 16,
         .max_caps = 1024,
         .cpu_quota_percent = 100
     };
     
-    console_puts("[Domain] Core-0 quota: 1MB memory, 16 threads, 1024 caps, 100% CPU\n");
+    console_puts("[Domain] Core-0 quota: 64MB memory, 16 threads, 1024 caps, 100% CPU\n");
     
     domain_id_t core_domain;
     hic_status_t status = domain_create(DOMAIN_TYPE_CORE, HIC_INVALID_DOMAIN, &core_quota, &core_domain);
@@ -98,6 +98,12 @@ void domain_system_init(void)
 
 /**
  * 创建域
+ *
+ * 设计说明（零栈分配）：
+ * domain_create 的临时状态不分配在服务线程栈上，
+ * 而是写入新域 CNode 根节点的尾部空闲区（见 cnode_tail_scratch）。
+ * CNode 块在 cspace_init 时分配，已有物理页，无需额外 PMM 操作。
+ * 这避免了从 init_launcher 服务线程深调用链中调用时的栈溢出。
  */
 hic_status_t domain_create(domain_type_t type, domain_id_t parent,
                            const domain_quota_t *quota, domain_id_t *out)
@@ -110,25 +116,25 @@ hic_status_t domain_create(domain_type_t type, domain_id_t parent,
             break;
         }
     }
-    
+
     if (domain_id == HIC_INVALID_DOMAIN) {
         return HIC_ERROR_NO_RESOURCE;
     }
-    
+
     domain_t *domain = &g_domains[domain_id];
-    
+
     /* 初始化能力空间（CSpace） */
     domain->cap_capacity = quota->max_caps;
-    
+
     if (type == DOMAIN_TYPE_CORE) {
         /* Core-0 域：使用内核固定内存，不额外分配 */
-        domain->cspace = cspace_get(HIC_DOMAIN_CORE);  /* 获取全局 CSpace */
+        domain->cspace = cspace_get(HIC_DOMAIN_CORE);
         domain->root_cnode = HIC_CAP_INVALID;
         domain->phys_base = (phys_addr_t)_text_start;
         domain->phys_size = (size_t)(_kernel_end - _text_start);
     } else {
         /* 其他域：初始化 CSpace */
-        u8 root_slot_bits = 8;  /* 默认 256 槽位 */
+        u8 root_slot_bits = 8;
         hic_status_t cspace_status = cspace_init(domain_id, root_slot_bits);
         if (cspace_status != HIC_SUCCESS) {
             return HIC_ERROR_NO_RESOURCE;
@@ -140,24 +146,47 @@ hic_status_t domain_create(domain_type_t type, domain_id_t parent,
             domain->root_cnode = HIC_CAP_INVALID;
         }
     }
-    
+
+    /*
+     * ── 零分配临时存储区 ──
+     *
+     * 后续操作（分配 mem_base、创建页表、映射内核段）所需的
+     * 临时状态写入 CNode 尾部空闲区，不在栈上存储。
+     * 这确保从服务线程（16KB 小栈）调用时不会栈溢出。
+     *
+     * CNode 布局（8192 字节块）:
+     *   [cnode_t]          ~48 字节
+     *   [slot[0..255]]    4096 字节
+     *   ─────────────────
+     *   [scratch 区域]     ~4048 字节 ← 以下操作使用此区域
+     */
+    /* 获取 CNode 尾部 scratching 区 */
+    u16 nslots = 1U << 8;
+    cnode_t *root_cnode = NULL;
+    void *scratch = NULL;
+    if (domain->cspace) {
+        cap_entry_t *ce = &g_global_cap_table[domain->root_cnode];
+        if (ce->rights & CAP_CNODE) {
+            root_cnode = (cnode_t*)ce->memory.base;
+            scratch = cnode_tail_scratch(root_cnode, nslots);
+        }
+    }
+
     /* 分配物理内存（Core-0 域不需要额外分配） */
     phys_addr_t mem_base = 0;
     size_t mem_size = quota->max_memory;
-    
+
     if (type != DOMAIN_TYPE_CORE) {
         if (pmm_alloc_frames(domain_id, (u32)((mem_size + PAGE_SIZE - 1) / PAGE_SIZE),
                              PAGE_FRAME_PRIVILEGED, &mem_base) != HIC_SUCCESS) {
-            /* CSpace 清理 */
             cspace_destroy(domain_id);
             return HIC_ERROR_NO_RESOURCE;
         }
     } else {
-        /* Core-0 使用内核内存范围 */
         mem_base = domain->phys_base;
         mem_size = domain->phys_size;
     }
-    
+
     /* 初始化域 */
     domain->domain_id = domain_id;
     domain->type = type;
@@ -176,22 +205,17 @@ hic_status_t domain_create(domain_type_t type, domain_id_t parent,
     domain->syscalls_total = 0;
     domain->flags = 0;
     domain->parent_domain = parent;
-    
-    /* 设置安全等级和允许的调度策略 */
+
     domain->sec_level = domain_get_sec_level(type);
     domain->allowed_sched_policies = domain_get_allowed_sched_policies(domain_id);
-    
+
     /* 创建独立页表 */
     if (type == DOMAIN_TYPE_CORE) {
-        /* Core-0 使用内核页表（共享地址空间） */
-        domain->page_table = 0;  /* 使用当前CR3（内核页表） */
+        domain->page_table = 0;
         domain->flags |= DOMAIN_FLAG_TRUSTED;
         console_puts("[Domain] Core-0 domain uses kernel page table\n");
-
-        /* 注册 Core-0 页表到 domain_switch 子系统 */
         pagetable_setup_domain(HIC_DOMAIN_CORE, pagetable_get_current());
     } else {
-        /* 其他域创建独立页表 */
         page_table_t *domain_pagetable = pagetable_create();
         if (domain_pagetable == NULL) {
             console_puts("[Domain] ERROR: Failed to create page table for domain\n");
@@ -199,16 +223,25 @@ hic_status_t domain_create(domain_type_t type, domain_id_t parent,
             cspace_destroy(domain_id);
             return HIC_ERROR_NO_MEMORY;
         }
-        
+
         domain->page_table = (virt_addr_t)domain_pagetable;
-        
-        /* 映射域的物理内存到其虚拟地址空间 */
-        /* 使用恒等映射（虚拟地址 = 物理地址） */
-        hic_status_t map_status = pagetable_map(domain_pagetable, 
-                                                (virt_addr_t)mem_base, 
-                                                mem_base, 
+
+        /* 将 mem_base/mem_size/domain_pagetable 写入 scratch 区
+         * 后续内核段映射从 scratch 读取，减少栈上局部变量 */
+        if (scratch) {
+            u64 *s = (u64*)scratch;
+            s[0] = (u64)domain_pagetable;
+            s[1] = (u64)mem_base;
+            s[2] = (u64)mem_size;
+            s[3] = (u64)type;
+        }
+
+        /* 映射域的物理内存到其虚拟地址空间（恒等映射） */
+        hic_status_t map_status = pagetable_map(domain_pagetable,
+                                                (virt_addr_t)mem_base,
+                                                mem_base,
                                                 mem_size,
-                                                PERM_RW, 
+                                                PERM_RW,
                                                 MAP_TYPE_USER);
         if (map_status != HIC_SUCCESS) {
             console_puts("[Domain] ERROR: Failed to map domain memory\n");
@@ -217,200 +250,193 @@ hic_status_t domain_create(domain_type_t type, domain_id_t parent,
             cspace_destroy(domain_id);
             return HIC_ERROR_NO_MEMORY;
         }
-        
+
         console_puts("[Domain] Created independent page table for domain ");
         console_putu32(domain_id);
         console_puts(" at 0x");
         console_puthex64((u64)domain_pagetable);
         console_puts("\n");
-        
-        console_puts("[Domain] Mapped domain memory: 0x");
-        console_puthex64(mem_base);
-        console_puts(" - 0x");
-        console_puthex64(mem_base + mem_size);
-        console_puts("\n");
-        
-        /* 映射内核代码段到域页表（机制：确保切换页表后内核代码仍可执行） */
-        {
-            size_t text_size = (size_t)(_text_end - _text_start);
-            if (text_size > 0) {
-                hic_status_t kernel_map_status = pagetable_map(
-                    domain_pagetable,
-                    (virt_addr_t)_text_start,
-                    (phys_addr_t)_text_start,
-                    text_size,
-                    PERM_RX,           /* 只读可执行 */
-                    MAP_TYPE_KERNEL    /* 内核映射 */
-                );
-                if (kernel_map_status != HIC_SUCCESS) {
-                    console_puts("[Domain] WARN: Failed to map kernel text for domain\n");
-                    /* 继续执行，非致命错误 */
+
+        /* 映射内核段到域页表
+         * 映射参数从 scratch 区读取，不增加栈深度 */
+        size_t text_size = (size_t)(_text_end - _text_start);
+        if (text_size > 0) {
+            pagetable_map(domain_pagetable,
+                (virt_addr_t)_text_start,
+                (phys_addr_t)_text_start,
+                text_size,
+                PERM_RX,
+                MAP_TYPE_KERNEL);
+        }
+
+        size_t rodata_size = (size_t)(_rodata_end - _rodata_start);
+        if (rodata_size > 0) {
+            pagetable_map(domain_pagetable,
+                (virt_addr_t)_rodata_start,
+                (phys_addr_t)_rodata_start,
+                rodata_size,
+                PERM_READ,
+                MAP_TYPE_KERNEL);
+        }
+
+        if (type == DOMAIN_TYPE_PRIVILEGED) {
+            size_t data_size = (size_t)(_data_end - _data_start);
+            if (data_size > 0) {
+                pagetable_map(domain_pagetable,
+                    (virt_addr_t)_data_start,
+                    (phys_addr_t)_data_start,
+                    data_size,
+                    PERM_RW,
+                    MAP_TYPE_KERNEL);
+            }
+
+            extern char __bss_start[], __bss_end[];
+            size_t bss_size = (size_t)(__bss_end - __bss_start);
+            if (bss_size > 0) {
+                pagetable_map(domain_pagetable,
+                    (virt_addr_t)__bss_start,
+                    (phys_addr_t)__bss_start,
+                    bss_size,
+                    PERM_RW,
+                    MAP_TYPE_KERNEL);
+            }
+
+            {
+                extern char __stack_start[], __stack_end[];
+                size_t stack_size = (size_t)(__stack_end - __stack_start);
+                if (stack_size > 0) {
+                    pagetable_map(domain_pagetable,
+                        (virt_addr_t)__stack_start,
+                        (phys_addr_t)__stack_start,
+                        stack_size,
+                        PERM_RW,
+                        MAP_TYPE_KERNEL);
                 }
             }
-            
-            /* 映射内核只读数据段 */
-            size_t rodata_size = (size_t)(_rodata_end - _rodata_start);
-            if (rodata_size > 0) {
+
+            extern char __lbss_start[], __lbss_end[];
+            size_t lbss_size = (size_t)(__lbss_end - __lbss_start);
+            if (lbss_size > 0) {
                 pagetable_map(domain_pagetable,
-                    (virt_addr_t)_rodata_start,
-                    (phys_addr_t)_rodata_start,
-                    rodata_size,
+                    (virt_addr_t)__lbss_start,
+                    (phys_addr_t)__lbss_start,
+                    lbss_size,
+                    PERM_RW,
+                    MAP_TYPE_KERNEL);
+            }
+
+            {
+                extern char _static_modules_text_start[], _static_modules_text_end[];
+                extern char _static_modules_data_start[], _static_modules_data_end[];
+                extern char _static_modules_bss_start[], _static_modules_bss_end[];
+
+                size_t svc_text_size = (size_t)(_static_modules_text_end - _static_modules_text_start);
+                if (svc_text_size > 0) {
+                    pagetable_map(domain_pagetable,
+                        (virt_addr_t)_static_modules_text_start,
+                        (phys_addr_t)_static_modules_text_start,
+                        svc_text_size,
+                        PERM_RX,
+                        MAP_TYPE_KERNEL);
+                }
+
+                size_t svc_data_size = (size_t)(_static_modules_data_end - _static_modules_data_start);
+                if (svc_data_size > 0) {
+                    pagetable_map(domain_pagetable,
+                        (virt_addr_t)_static_modules_data_start,
+                        (phys_addr_t)_static_modules_data_start,
+                        svc_data_size,
+                        PERM_RW,
+                        MAP_TYPE_KERNEL);
+                }
+
+                size_t svc_bss_size = (size_t)(_static_modules_bss_end - _static_modules_bss_start);
+                if (svc_bss_size > 0) {
+                    pagetable_map(domain_pagetable,
+                        (virt_addr_t)_static_modules_bss_start,
+                        (phys_addr_t)_static_modules_bss_start,
+                        svc_bss_size,
+                        PERM_RW,
+                        MAP_TYPE_KERNEL);
+                }
+            }
+
+            console_puts("[Domain] Privileged domain: kernel data mapped RW for scheduler\n");
+        } else {
+            size_t data_size = (size_t)(_data_end - _data_start);
+            if (data_size > 0) {
+                pagetable_map(domain_pagetable,
+                    (virt_addr_t)_data_start,
+                    (phys_addr_t)_data_start,
+                    data_size,
                     PERM_READ,
                     MAP_TYPE_KERNEL);
             }
-            
-            /* 
-             * 内核数据段和 BSS 段映射策略：
-             * 
-             * 对于 Privileged-1 域：需要可写权限
-             * - 调度器切换页表后仍需操作内核栈（位于 .bss）
-             * - context_switch 的 push/pop 操作需要写入栈
-             * - 必须确保栈操作在页表切换后仍能正常工作
-             * 
-             * 对于 Application-3 域：保持只读
-             * - 这些域不会直接执行内核代码
-             * - 通过 IPC 与内核交互，无需直接访问内核数据
-             * 
-             * 安全考虑：
-             * - Privileged-1 服务已通过能力系统隔离
-             * - 恶意服务无法绕过能力检查
-             */
-            if (type == DOMAIN_TYPE_PRIVILEGED) {
-                /* 特权域：映射为可读写（调度器需要操作栈） */
-                size_t data_size = (size_t)(_data_end - _data_start);
-                if (data_size > 0) {
-                    pagetable_map(domain_pagetable,
-                        (virt_addr_t)_data_start,
-                        (phys_addr_t)_data_start,
-                        data_size,
-                        PERM_RW,  /* 可读写：特权域需要操作内核栈 */
-                        MAP_TYPE_KERNEL);
-                }
-                
-                extern char __bss_start[], __bss_end[];
-                size_t bss_size = (size_t)(__bss_end - __bss_start);
-                if (bss_size > 0) {
-                    pagetable_map(domain_pagetable,
-                        (virt_addr_t)__bss_start,
-                        (phys_addr_t)__bss_start,
-                        bss_size,
-                        PERM_RW,  /* 可读写：内核栈在 BSS 中 */
-                        MAP_TYPE_KERNEL);
-                }
-                
-                extern char __lbss_start[], __lbss_end[];
-                size_t lbss_size = (size_t)(__lbss_end - __lbss_start);
-                if (lbss_size > 0) {
-                    pagetable_map(domain_pagetable,
-                        (virt_addr_t)__lbss_start,
-                        (phys_addr_t)__lbss_start,
-                        lbss_size,
-                        PERM_RW,  /* 可读写：大型 BSS 可能包含栈 */
-                        MAP_TYPE_KERNEL);
-                }
 
-                /* 映射静态服务模块区域（所有特权服务代码位于此区域） */
-                {
-                    extern char _static_modules_text_start[], _static_modules_text_end[];
-                    extern char _static_modules_data_start[], _static_modules_data_end[];
-                    extern char _static_modules_bss_start[], _static_modules_bss_end[];
+            extern char __bss_start[], __bss_end[];
+            size_t bss_size = (size_t)(__bss_end - __bss_start);
+            if (bss_size > 0) {
+                pagetable_map(domain_pagetable,
+                    (virt_addr_t)__bss_start,
+                    (phys_addr_t)__bss_start,
+                    bss_size,
+                    PERM_READ,
+                    MAP_TYPE_KERNEL);
+            }
 
-                    size_t svc_text_size = (size_t)(_static_modules_text_end - _static_modules_text_start);
-                    if (svc_text_size > 0) {
-                        pagetable_map(domain_pagetable,
-                            (virt_addr_t)_static_modules_text_start,
-                            (phys_addr_t)_static_modules_text_start,
-                            svc_text_size,
-                            PERM_RX,
-                            MAP_TYPE_KERNEL);
-                    }
-
-                    size_t svc_data_size = (size_t)(_static_modules_data_end - _static_modules_data_start);
-                    if (svc_data_size > 0) {
-                        pagetable_map(domain_pagetable,
-                            (virt_addr_t)_static_modules_data_start,
-                            (phys_addr_t)_static_modules_data_start,
-                            svc_data_size,
-                            PERM_RW,
-                            MAP_TYPE_KERNEL);
-                    }
-
-                    size_t svc_bss_size = (size_t)(_static_modules_bss_end - _static_modules_bss_start);
-                    if (svc_bss_size > 0) {
-                        pagetable_map(domain_pagetable,
-                            (virt_addr_t)_static_modules_bss_start,
-                            (phys_addr_t)_static_modules_bss_start,
-                            svc_bss_size,
-                            PERM_RW,
-                            MAP_TYPE_KERNEL);
-                    }
-                }
-
-                console_puts("[Domain] Privileged domain: kernel data mapped RW for scheduler\n");
-            } else {
-                /* 非特权域（Application）：映射为只读 */
-                size_t data_size = (size_t)(_data_end - _data_start);
-                if (data_size > 0) {
-                    pagetable_map(domain_pagetable,
-                        (virt_addr_t)_data_start,
-                        (phys_addr_t)_data_start,
-                        data_size,
-                        PERM_READ,  /* 只读：防止权限提升攻击 */
-                        MAP_TYPE_KERNEL);
-                }
-                
-                extern char __bss_start[], __bss_end[];
-                size_t bss_size = (size_t)(__bss_end - __bss_start);
-                if (bss_size > 0) {
-                    pagetable_map(domain_pagetable,
-                        (virt_addr_t)__bss_start,
-                        (phys_addr_t)__bss_start,
-                        bss_size,
-                        PERM_READ,
-                        MAP_TYPE_KERNEL);
-                }
-                
-                extern char __lbss_start[], __lbss_end[];
-                size_t lbss_size = (size_t)(__lbss_end - __lbss_start);
-                if (lbss_size > 0) {
-                    pagetable_map(domain_pagetable,
-                        (virt_addr_t)__lbss_start,
-                        (phys_addr_t)__lbss_start,
-                        lbss_size,
-                        PERM_READ,
-                        MAP_TYPE_KERNEL);
-                }
+            extern char __lbss_start[], __lbss_end[];
+            size_t lbss_size = (size_t)(__lbss_end - __lbss_start);
+            if (lbss_size > 0) {
+                pagetable_map(domain_pagetable,
+                    (virt_addr_t)__lbss_start,
+                    (phys_addr_t)__lbss_start,
+                    lbss_size,
+                    PERM_READ,
+                    MAP_TYPE_KERNEL);
             }
         }
-        
-        /* 注册域页表到 domain_switch 子系统 */
+
         pagetable_setup_domain(domain_id, domain_pagetable);
         console_puts("[Domain] Registered page table for domain ");
         console_putu32(domain_id);
         console_puts(" (with kernel regions mapped)\n");
 
-        /* 映射 IPC 3.0 域数据页（所有域都需要读取 current_domain_id） */
+        {
+            extern u64 usable_max_frame;
+            phys_addr_t pmm_start = (phys_addr_t)(uintptr_t)((u64)_kernel_end + 0xFFF) & ~0xFFFULL;
+            phys_addr_t pmm_end = (phys_addr_t)(usable_max_frame * PAGE_SIZE);
+            if (pmm_end > pmm_start) {
+                pagetable_map(domain_pagetable,
+                    (virt_addr_t)pmm_start, pmm_start,
+                    (size_t)(pmm_end - pmm_start),
+                    PERM_RW, MAP_TYPE_KERNEL);
+            }
+        }
+
         ipc3_map_domain_data(domain_id);
     }
-    
-    /* 特权域标记（Privileged-1 服务默认为特权域） */
+
+    /* 特权域标记 */
     if (type == DOMAIN_TYPE_PRIVILEGED) {
         domain->flags |= DOMAIN_FLAG_PRIVILEGED;
-        
-        /* 设置运行时特权位图（增强安全） */
         extern void cap_set_privileged_domain(domain_id_t, bool);
         cap_set_privileged_domain(domain_id, true);
     }
-    
+
     g_domain_count++;
-    
+
     *out = domain_id;
-    
+
+    /* 清理 scratch 区 */
+    if (scratch) {
+        memzero(scratch, 512);
+    }
+
     /* 调用形式化验证 */
     if (fv_check_all_invariants() != FV_SUCCESS) {
         console_puts("[Domain] Invariant violation detected after domain_create!\n");
     }
-    
+
     return HIC_SUCCESS;
 }
 

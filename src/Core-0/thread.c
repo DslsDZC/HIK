@@ -253,7 +253,7 @@ hic_status_t thread_create_bound(domain_id_t domain_id,
     extern hic_status_t pmm_alloc_frames(domain_id_t owner, u32 count,
                                           page_frame_type_t type, phys_addr_t *out);
     phys_addr_t stack_phys;
-    hic_status_t status = pmm_alloc_frames(domain_id, 2, PAGE_FRAME_PRIVILEGED, &stack_phys);
+    hic_status_t status = pmm_alloc_frames(domain_id, 4, PAGE_FRAME_PRIVILEGED, &stack_phys);
     if (status != HIC_SUCCESS) {
         atomic_exit_critical(irq);
         return HIC_ERROR_NO_RESOURCE;
@@ -270,7 +270,7 @@ hic_status_t thread_create_bound(domain_id_t domain_id,
             pagetable_map(domain_pagetable,
                           (virt_addr_t)stack_phys,  /* 虚拟地址 = 物理地址（恒等映射）*/
                           stack_phys,                /* 物理地址 */
-                          2 * PAGE_SIZE,             /* 大小 */
+                          4 * PAGE_SIZE,             /* 大小 */
                           PERM_RW,                   /* 读写权限 */
                           MAP_TYPE_USER);           /* 内核栈映射（恒等映射）*/
         }
@@ -288,7 +288,7 @@ hic_status_t thread_create_bound(domain_id_t domain_id,
     thread->core_affinity = 0xFFFFFFFF;          /* 默认所有核心亲和性 */
     thread->flags = THREAD_FLAG_BOUND;           /* 标记已绑定 */
     thread->stack_base = (virt_addr_t)stack_phys;
-    thread->stack_size = 2 * PAGE_SIZE;
+    thread->stack_size = 4 * PAGE_SIZE;
     thread->last_run_time = 0;
     thread->cpu_time_used = 0;
     thread->time_slice = 100;  /* 默认时间片 */
@@ -300,7 +300,7 @@ hic_status_t thread_create_bound(domain_id_t domain_id,
      *   entry_point          <- context_switch ret 后跳转到这里
      *   [callee-saved 空间]  <- stack_ptr 指向这里
      */
-    u64 *stack_top = (u64 *)(stack_phys + 2 * PAGE_SIZE);
+    u64 *stack_top = (u64 *)(stack_phys + 4 * PAGE_SIZE);
     
     /* 压入线程退出处理函数地址 */
     stack_top--;
@@ -419,7 +419,7 @@ hic_status_t thread_create(domain_id_t domain_id, virt_addr_t entry_point,
     extern hic_status_t pmm_alloc_frames(domain_id_t owner, u32 count,
                                           page_frame_type_t type, phys_addr_t *out);
     phys_addr_t stack_phys;
-    hic_status_t status = pmm_alloc_frames(domain_id, 2, PAGE_FRAME_PRIVILEGED, &stack_phys);
+    hic_status_t status = pmm_alloc_frames(domain_id, 4, PAGE_FRAME_PRIVILEGED, &stack_phys);
     if (status != HIC_SUCCESS) {
         atomic_exit_critical(irq);
         return HIC_ERROR_NO_RESOURCE;
@@ -431,7 +431,7 @@ hic_status_t thread_create(domain_id_t domain_id, virt_addr_t entry_point,
         hic_status_t map_status = pagetable_map(domain_pagetable,
                       (virt_addr_t)stack_phys,  /* 虚拟地址 = 物理地址（恒等映射）*/
                       stack_phys,                /* 物理地址 */
-                      2 * PAGE_SIZE,             /* 大小 */
+                      4 * PAGE_SIZE,             /* 大小 */
                       PERM_RW,                   /* 读写权限 */
                       MAP_TYPE_USER);            /* 用户映射 */
         /* 调试：显示栈映射 */
@@ -456,14 +456,14 @@ hic_status_t thread_create(domain_id_t domain_id, virt_addr_t entry_point,
     thread->core_affinity = 0xFFFFFFFF;      /* 默认所有核心亲和性 */
     thread->flags = (target_core != INVALID_LOGICAL_CORE) ? THREAD_FLAG_BOUND : 0;
     thread->stack_base = (virt_addr_t)stack_phys;
-    thread->stack_size = 2 * PAGE_SIZE;
+    thread->stack_size = 4 * PAGE_SIZE;
     thread->last_run_time = 0;
     thread->cpu_time_used = 0;
     thread->time_slice = 100;  /* 默认时间片 */
     thread->wait_flags = 0;
     
     /* 初始化栈：设置入口点和退出处理 */
-    u64 *stack_top = (u64 *)(stack_phys + 2 * PAGE_SIZE);
+    u64 *stack_top = (u64 *)(stack_phys + 4 * PAGE_SIZE);
     
     /* 压入线程退出处理函数地址 */
     stack_top--;

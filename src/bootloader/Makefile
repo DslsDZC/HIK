@@ -3,7 +3,7 @@
 
 # 项目根目录（相对于此Makefile）
 ROOT_DIR = ../..
-KERNEL_HIC = $(ROOT_DIR)/build/bin/hic-kernel.hic
+KERNEL_BIN = $(ROOT_DIR)/build/bin/hic-kernel.bin
 
 # 编译器和工具
 UEFI_CC      = x86_64-w64-mingw32-gcc
@@ -112,17 +112,17 @@ $(PLATFORM_C): $(PLATFORM_YAML)
 	@echo "  return sizeof(platform_yaml_data);" >> $@
 	@echo "}" >> $@
 
-# 生成embedded_kernel.h（从内核HIK文件转换为C数组）
-$(EMBEDDED_KERNEL_H): $(KERNEL_HIC)
-	@echo "Generating embedded_kernel.h from $(KERNEL_HIC)..."
-	@echo "/* Auto-generated from build/bin/hic-kernel.hic */" > $@
+# 生成embedded_kernel.h（从内核二进制文件转换为C数组）
+$(EMBEDDED_KERNEL_H): $(KERNEL_BIN)
+	@echo "Generating embedded_kernel.h from $(KERNEL_BIN)..."
+	@echo "/* Auto-generated from build/bin/hic-kernel.bin */" > $@
 	@echo "#include <stdint.h>" >> $@
 	@echo "" >> $@
-	@echo "static const unsigned char bin_hic_kernel_hic[] = {" >> $@
+	@echo "static const unsigned char bin_hic_kernel_bin[] = {" >> $@
 	@xxd -i $< | grep -E "^\s+0x" >> $@
 	@echo "};" >> $@
 	@echo "" >> $@
-	@echo "static const unsigned int bin_hic_kernel_hic_len = sizeof(bin_hic_kernel_hic);" >> $@
+	@echo "static const unsigned int bin_hic_kernel_bin_len = sizeof(bin_hic_kernel_bin);" >> $@
 
 # 创建目录
 $(OBJ_DIR) $(BIN_DIR):

@@ -21,7 +21,7 @@ CORE_OBJ = $(addprefix $(BUILD)/, $(notdir $(CORE_SRC:.c=.o)))
 LIB_OBJ  = $(addprefix $(BUILD)/, $(notdir $(LIB_SRC:.c=.o)))
 ARCH_OBJ = $(addprefix $(BUILD)/a_, $(notdir $(ARCH_C:.c=.o)))
 ASM_OBJ  = $(foreach f,$(ARCH_S),$(BUILD)/asm_$(notdir $(basename $f)).o)
-P1_OBJ   = $(addprefix $(BUILD)/p1_, $(notdir $(P1_SRCS:.c=.o))) $(STATIC_MOD_GEN:.c=.o)
+P1_OBJ   = $(addprefix $(BUILD)/p1_, $(STATIC_SERVICES:=.o)) $(STATIC_MOD_GEN:.c=.o)
 TARGET = $(BUILD)/hic-kernel.elf
 BIN    = $(BUILD)/hic-kernel.bin
 

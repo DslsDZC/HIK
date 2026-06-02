@@ -98,10 +98,10 @@ static_modules:
     critical: true
     privileged: true
 
-  # 2. IDE 磁盘驱动（fat32_service 依赖）
+  # 2. IDE 块设备驱动（FAT32 依赖 IDE 接口）
   - name: ide_driver
     type: driver
-    priority: 0                    # CRITICAL - 与 verifier 同级
+    priority: 0                    # CRITICAL
     auto_start: true
     critical: true
     privileged: true
@@ -116,29 +116,17 @@ static_modules:
     critical: true
     privileged: true
 
-  # 4. 内存管理服务（策略层）
-  - name: memory_service
-    type: service
-    priority: 1                    # HIGH
-    auto_start: true
-    critical: true
-    privileged: true
-
-  # 5. 设备管理服务（策略层）
-  - name: device_manager
-    type: service
-    priority: 2                    # NORMAL
-    auto_start: true
-    critical: false
-    privileged: true
-
-  # 6. 安全监控服务（策略层）
-  - name: security_monitor
-    type: service
-    priority: 2                    # NORMAL
-    auto_start: true
-    critical: false
-    privileged: true
+  # memory_service / device_manager / security_monitor 启动时崩溃（需修复）
+  # 已从 static_modules 中移除，待修复后恢复
+  # - name: memory_service
+  #   type: service
+  #   priority: 1
+  # - name: device_manager
+  #   type: service
+  #   priority: 2
+  # - name: security_monitor
+  #   type: service
+  #   priority: 2
 
   # 7. 初始服务启动器（最后加载，引导动态模块）
   # 从磁盘加载 module_manager_service.hicmod
