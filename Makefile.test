@@ -1,0 +1,62 @@
+# HIC 单元测试 Makefile (主机编译)
+# 使用 Unity 测试框架
+
+ROOT  := $(CURDIR)
+CORE0 := $(ROOT)/src/Core-0
+TEST  := $(ROOT)/tests
+BUILD := $(ROOT)/build
+STUBS := $(TEST)/stubs
+CC    := gcc
+
+CFLAGS := -g -O0 -Wall -Werror=implicit-function-declaration \
+          -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable \
+          -I$(CORE0) -I$(CORE0)/include -I$(CORE0)/lib \
+          -I$(TEST)/unity -I$(STUBS)
+
+SRCS := $(CORE0)/capability_core.c $(CORE0)/capability_cnode.c \
+        $(CORE0)/capability_logical_core.c $(CORE0)/capability_privileged.c \
+        $(CORE0)/capability_shmem.c $(CORE0)/capability_update.c \
+        $(STUBS)/hal_stub.c $(STUBS)/pmm_stub.c $(STUBS)/console_stub.c \
+        $(STUBS)/domain_stub.c $(STUBS)/mem_stub.c $(STUBS)/string_stub.c \
+        $(TEST)/unity/unity.c
+
+.PHONY: all test clean
+
+all: test
+
+$(BUILD)/test_cap_core: $(SRCS) $(TEST)/capability/test_cap_core.c
+	mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $^ -o $@
+
+$(BUILD)/test_cap_cnode: $(SRCS) $(TEST)/capability/test_cap_cnode.c
+	mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $^ -o $@
+
+$(BUILD)/test_cap_shmem: $(SRCS) $(TEST)/capability/test_cap_shmem.c
+	mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $^ -o $@
+
+$(BUILD)/test_cap_update: $(SRCS) $(TEST)/capability/test_cap_update.c
+	mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $^ -o $@
+
+TEST_BINS := $(BUILD)/test_cap_core $(BUILD)/test_cap_cnode \
+            $(BUILD)/test_cap_shmem $(BUILD)/test_cap_update
+
+test: $(TEST_BINS)
+	@echo ""
+	@echo "========================================"
+	@echo "  Running all capability unit tests..."
+	@echo "========================================"
+	@for t in $(TEST_BINS); do \
+		echo ""; \
+		echo "--- $$(basename $$t) ---"; \
+		$$t 2>&1 | grep -E "^\w+\.c:[0-9]+|^[0-9]+ Tests|FAIL"; \
+	done
+	@echo ""
+	@echo "========================================"
+	@echo "  All tests completed."
+	@echo "========================================"
+
+clean:
+	rm -f $(BUILD)/test_cap_*

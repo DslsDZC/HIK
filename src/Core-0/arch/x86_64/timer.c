@@ -15,6 +15,7 @@
 #include "hal.h"
 #include "irq.h"
 #include "thread.h"
+#include "lib/console.h"
 
 /* 8259 PIC I/O 端口 */
 #define PIC1_CMD  0x20
@@ -34,6 +35,8 @@
 
 void timer_init(void)
 {
+    console_puts("[TIMER] Initializing PIT at 1000Hz\n");
+
     /* ICW1: 初始化 PIC1/PIC2 */
     hal_outb(PIC1_CMD, 0x11);
     hal_outb(PIC2_CMD, 0x11);

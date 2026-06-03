@@ -9,6 +9,7 @@ BUILD = $(O)
 CFLAGS = -ffreestanding -nostdlib -fno-stack-protector -fno-builtin \
          -fno-pie \
          -m64 -mno-red-zone -mcmodel=small \
+         -mno-sse -mno-sse2 -mno-mmx -mno-3dnow \
          -Wall -Wextra -Wno-unused-parameter \
          -I$(CORE0) -I$(CORE0)/include -I$(CORE0)/lib -I$(CORE0)/arch/x86_64 \
          -I$(P1DIR)/include -DCONFIG_MMU=1 -DCONFIG_DEBUG=1
@@ -88,7 +89,11 @@ $(EFI_DISK): $(BIN) p1-modules
 
 # 运行 QEMU 并挂载磁盘（完整启动流程）
 img-run: $(TARGET) $(TLV) $(EFI_DISK)
-	qemu-system-x86_64 -machine pc -m 2G -nographic -serial mon:stdio \
+	qemu-system-x86_64 -machine pc -m 2G -nographic \
+		-serial file:qemu_serial.log \
+		-no-reboot \
+		-d int,cpu_reset \
+		-D qemu_debug.log \
 		-device loader,addr=0x50000000,file=$(TLV),force-raw=on \
 		-drive file=$(EFI_DISK),if=ide,format=raw \
 		-kernel $(TARGET)

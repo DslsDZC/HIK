@@ -310,9 +310,11 @@ void irq_dispatch(u32 vector)
     typedef void (*handler_t)(void);
     ((handler_t)entry->handler_address)();
     
-    /* 发送 EOI */
+    /* 发送 EOI to 8259 PIC (legacy mode) */
     if (vector >= 32 && vector < 256) {
-        volatile u32* lapic = (volatile u32*)0xFEE00000;
-        lapic[0xB0 / 4] = 0;
+        hal_outb(0x20, 0x20);  /* EOI to PIC1 */
+        if (vector >= 40) {
+            hal_outb(0xA0, 0x20);  /* EOI to PIC2 (slave) */
+        }
     }
 }

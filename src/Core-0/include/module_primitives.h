@@ -219,6 +219,11 @@ uint64_t module_cap_create_endpoint(uint32_t domain_id, uint32_t *endpoint_id);
 uint64_t module_domain_start(uint32_t domain_id, uint64_t entry_point);
 
 /**
+ * @brief 线程让出 CPU（协作调度）
+ */
+void module_thread_yield(void);
+
+/**
  * @brief 内存拷贝
  */
 void module_memcpy(void *dest, const void *src, size_t size);

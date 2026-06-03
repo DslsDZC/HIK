@@ -2,12 +2,13 @@
 .cache/
 *.idx
 AGENTS.md
+CLAUDE.md
+
 # 构建输出
 build/
 output/
 iso_output/
 safec/
-*.md
 .toolchains
 
 # Python
@@ -24,6 +25,12 @@ scripts/output/
 
 # 调试文件
 *.gdb
+# QEMU 串口日志
+qemu_serial.log
+qemu_debug.log
+
+# 备份文件
+*.backup
 *.log
 debug_*.txt
 *.fd
@@ -66,4 +73,3 @@ platform.yaml.local
 
 src/bootloader/src/embedded_kernel.h
 src/Core-0/math_proofs.tex
-

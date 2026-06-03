@@ -51,6 +51,7 @@ extern void *module_memset(void *dst, int c, size_t n);
 extern uint64_t module_cap_create_domain(uint32_t parent_domain, uint32_t *new_domain);
 extern uint64_t module_cap_create_service(uint32_t domain_id, uint32_t *service_id);
 extern uint64_t module_domain_start(uint32_t domain_id, uint64_t entry_point);
+extern void module_thread_yield(void);
 extern uint64_t module_memory_alloc(uint32_t domain_id, uint64_t size, uint32_t type, uint64_t *phys_addr);
 
 /* 哈希验证（由 Core-0 提供） */
@@ -744,7 +745,7 @@ int init_launcher_start(void) {
 
                 /* 进入空闲模式 - 静态服务已经运行 */
                 while (1) {
-                    __asm__ volatile("hlt"); /* 避免调度器切换导致的崩溃 */
+                    module_thread_yield();
                 }
             }
         }
@@ -775,7 +776,7 @@ int init_launcher_start(void) {
         
         /* 进入空闲模式 */
         while (1) {
-            __asm__ volatile("hlt"); /* 避免调度器切换导致的崩溃 */
+            module_thread_yield();
         }
     }
     
@@ -884,7 +885,7 @@ int init_launcher_start(void) {
     
     /* 等待 module_manager 初始化 */
     for (int i = 0; i < 1000; i++) {
-        __asm__ volatile("hlt"); /* 避免调度器切换导致的崩溃 */
+        module_thread_yield();
     }
     
     launcher_log("Init launcher entering idle mode");
@@ -893,7 +894,7 @@ int init_launcher_start(void) {
     /* 主服务循环 - 提供简单的命令行交互 */
     int count = 0;
     while (1) {
-        __asm__ volatile("hlt"); /* 避免调度器切换导致的崩溃 */
+        module_thread_yield();
         count++;
         
         /* 每 10000000 次循环打印一次心跳 */

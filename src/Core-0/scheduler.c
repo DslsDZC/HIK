@@ -138,9 +138,11 @@ thread_t *schedule(void)
  * Privileged-1 scheduler. Core-0 provides this as a mechanism
  * notification point — policy decisions belong to the upper layer.
  */
+volatile int g_reschedule_needed = 0;
+
 void scheduler_tick(void)
 {
-    /* P1 scheduler handles preemption policy via its own timer mechanism */
+    g_reschedule_needed = 1;
 }
 
 /* ==================== Thread State Helpers (Backward Compat) ==================== */

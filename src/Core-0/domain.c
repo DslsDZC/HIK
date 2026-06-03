@@ -211,10 +211,40 @@ hic_status_t domain_create(domain_type_t type, domain_id_t parent,
 
     /* 创建独立页表 */
     if (type == DOMAIN_TYPE_CORE) {
-        domain->page_table = 0;
+        page_table_t *domain_pagetable = pagetable_create();
+        if (domain_pagetable == NULL) {
+            console_puts("[Domain] ERROR: Failed to create Core-0 page table\n");
+            return HIC_ERROR_NO_MEMORY;
+        }
+        domain->page_table = (virt_addr_t)domain_pagetable;
         domain->flags |= DOMAIN_FLAG_TRUSTED;
-        console_puts("[Domain] Core-0 domain uses kernel page table\n");
-        pagetable_setup_domain(HIC_DOMAIN_CORE, pagetable_get_current());
+        console_puts("[Domain] Core-0 page table at 0x");
+        console_puthex64((u64)domain_pagetable);
+        console_puts("\n");
+
+        /* Map kernel segments */
+        {
+            extern char __bss_start[], __bss_end[], __stack_start[], __stack_end[];
+            size_t s;
+            s = _text_end - _text_start;
+            if (s > 0) pagetable_map(domain_pagetable, (u64)_text_start, (u64)_text_start, s, PERM_RX, MAP_TYPE_KERNEL);
+            s = _rodata_end - _rodata_start;
+            if (s > 0) pagetable_map(domain_pagetable, (u64)_rodata_start, (u64)_rodata_start, s, PERM_READ, MAP_TYPE_KERNEL);
+            s = _data_end - _data_start;
+            if (s > 0) pagetable_map(domain_pagetable, (u64)_data_start, (u64)_data_start, s, PERM_RW, MAP_TYPE_KERNEL);
+            s = __bss_end - __bss_start;
+            if (s > 0) pagetable_map(domain_pagetable, (u64)__bss_start, (u64)__bss_start, s, PERM_RW, MAP_TYPE_KERNEL);
+            s = __stack_end - __stack_start;
+            if (s > 0) pagetable_map(domain_pagetable, (u64)__stack_start, (u64)__stack_start, s, PERM_RW, MAP_TYPE_KERNEL);
+        }
+
+        pagetable_setup_domain(HIC_DOMAIN_CORE, domain_pagetable);
+        /* Identity-map the full physical memory range for Core-0 access */
+        /* PMM manages up to 32MB (0x2000000), map it all */
+        pagetable_map(domain_pagetable,
+            (virt_addr_t)0x00000000, 0x00000000,
+            0x2000000, PERM_RW, MAP_TYPE_KERNEL);
+        pagetable_switch(domain_pagetable);
     } else {
         page_table_t *domain_pagetable = pagetable_create();
         if (domain_pagetable == NULL) {

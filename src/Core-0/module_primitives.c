@@ -721,6 +721,13 @@ uint64_t module_domain_start(uint32_t domain_id, uint64_t entry_point)
     return (uint64_t)domain_resume((domain_id_t)domain_id);
 }
 
+/** @brief 线程让出 CPU */
+void module_thread_yield(void)
+{
+    extern void thread_yield(void);
+    thread_yield();
+}
+
 /**
  * @brief 内存拷贝
  * 用于模块数据加载

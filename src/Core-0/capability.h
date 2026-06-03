@@ -106,7 +106,8 @@ extern domain_key_t g_domain_keys[HIC_DOMAIN_MAX];
 /* 快速生成混淆令牌（简单但有效） */
 static inline u32 cap_generate_token(domain_id_t domain, cap_id_t cap_id) {
     domain_key_t *key = &g_domain_keys[domain];
-    /* 使用域密钥和简单哈希生成令牌 */
+    /* 使用域密钥和简单哈希生成令牌
+     * 0x45D9F3B 为取模 2^32 下的伪随机乘数 */
     u32 hash = (cap_id * key->multiplier) ^ key->seed;
     hash = ((hash >> 16) ^ hash) * 0x45D9F3B;
     hash = ((hash >> 16) ^ hash);
@@ -198,6 +199,17 @@ static inline cap_id_t cap_core_end(cpu_id_t core) {
     return (core + 1) * CAP_SLOTS_PER_CORE;
 }
 
+/* Per-core 槽位分配：从当前核的独占段分配一个空闲槽 */
+static inline cap_id_t cap_core_first_free(void) {
+    cpu_id_t core = hal_get_cpu_id();
+    if (core >= CAP_MAX_CORES) core = CAP_MAX_CORES - 1;
+    cap_id_t slot = g_cap_next_free[core];
+    cap_id_t end = cap_core_end(core);
+    if (slot >= end) return HIC_CAP_INVALID;
+    g_cap_next_free[core] = slot + 1;
+    return slot;
+}
+
 /* 能力系统接口 */
 void capability_system_init(void);
 
@@ -250,6 +262,9 @@ hic_status_t cap_derive_with_policy(domain_id_t owner, cap_id_t parent,
 
 /* 能力验证（完整版本） */
 hic_status_t cap_check_access(domain_id_t domain, cap_handle_t handle, cap_rights_t required);
+
+/* 能力辅助函数 */
+bool capability_exists(cap_id_t cap);
 
 /* ==================== 特权内存访问通道（增强安全版） ==================== */
 
@@ -991,5 +1006,22 @@ void cap_cache_invalidate(domain_id_t domain, cptr_t cptr);
 
 /* 获取 CNode 块的尾部空闲区（供 domain_create 零栈临时存储） */
 void* cnode_tail_scratch(cnode_t *cnode, u16 nslots);
+
+/* ==================== 内部数据结构（跨文件共享） ==================== */
+
+/* 共享内存区域最大数量 */
+#define MAX_SHMEM_REGIONS  64
+
+/* 能力派生跟踪 */
+#define MAX_DERIVATIVES_PER_CAP 16
+
+typedef struct cap_derivative {
+    cap_id_t parent;
+    cap_id_t children[MAX_DERIVATIVES_PER_CAP];
+    u32 child_count;
+} cap_derivative_t;
+
+extern shmem_region_t g_shmem_regions[MAX_SHMEM_REGIONS];
+extern cap_derivative_t g_derivatives[CAP_TABLE_SIZE];
 
 #endif /* HIC_KERNEL_CAPABILITY_H */
