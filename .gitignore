@@ -73,3 +73,6 @@ platform.yaml.local
 
 src/bootloader/src/embedded_kernel.h
 src/Core-0/math_proofs.tex
+
+# 形式化验证（不提交）
+formal/
