@@ -14,6 +14,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>  /* size_t, NULL */
 
 /* 基础类型 */
 typedef uint8_t  u8;
@@ -32,11 +33,11 @@ typedef int16_t  s16;
 typedef int32_t  s32;
 typedef int64_t  s64;
 
-typedef uint64_t size_t;
-typedef int64_t  ssize_t;
-typedef uint64_t uintptr_t;
-typedef int64_t  intptr_t;
-
+/*
+ * size_t / uintptr_t — 由 C 编译器通过 <stddef.h>/<stdint.h> 提供。
+ * 不要手动重定义，否则 ARM32 (32-bit) 等架构会与编译器冲突。
+ * x86_64 上 size_t/uintptr_t 为 64-bit, ARM32 上为 32-bit。
+ */
 #ifndef SIZE_MAX
 #define SIZE_MAX ((size_t)-1)
 #endif

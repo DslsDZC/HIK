@@ -101,9 +101,37 @@ void boot_info_copy_to_static(void)
     }
 }
 
+/* ==================== BSS 错误检查 ==================== */
+
 /* ==================== TLV 解析 ==================== */
 
 static hic_mem_entry_t g_mem_map_storage[64];
+
+/* ==================== 最小引导信息 ==================== */
+
+/**
+ * boot_info_init_minimal — 在无 bootloader 传 TLV 时使用。
+ *
+ * 为 STM32 等直启平台提供最小引导信息，使用默认内存布局。
+ */
+void boot_info_init_minimal(void)
+{
+    memzero(&g_boot_info_storage, sizeof(g_boot_info_storage));
+    g_boot_info_storage.magic = HIC_BOOT_INFO_MAGIC;
+    g_boot_info_storage.version = HIC_BOOT_INFO_VERSION;
+    g_boot_info_storage.system.cpu_count = 1;
+
+    /* 设置单个内存区域（覆盖全部可用内存） */
+    g_boot_info_storage.mem_map = g_mem_map_storage;
+    g_boot_info_storage.mem_map_entry_count = 1;
+    g_mem_map_storage[0].base_address = 0;
+    g_mem_map_storage[0].length = 0xFFFFFFFF;
+    g_mem_map_storage[0].type = HIC_MEM_TYPE_USABLE;
+
+    g_boot_info = &g_boot_info_storage;
+
+    console_puts("[BOOT] Minimal boot info initialized (no TLV)\n");
+}
 
 void boot_info_parse_tlv(void)
 {

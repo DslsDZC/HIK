@@ -16,6 +16,7 @@
 #include "hardware_probe.h"
 #include "lib/console.h"
 #include "lib/mem.h"
+#include "lib/string.h"
 #include <stddef.h>
 
 /* ==================== 全局状态 ==================== */
@@ -50,6 +51,8 @@ void hal_register_arch_ops(const hal_arch_ops_t *ops)
             g_current_arch = HAL_ARCH_ARM64;
         } else if (ops->arch_name[0] == 'R' || ops->arch_name[0] == 'r') {
             g_current_arch = HAL_ARCH_RISCV64;
+        } else if (strstr(ops->arch_name, "STM32") || strstr(ops->arch_name, "stm32")) {
+            g_current_arch = HAL_ARCH_STM32F103;
         }
     }
     
@@ -197,20 +200,23 @@ void hal_context_switch(void *prev, void *next)
     }
 }
 
-void hal_context_init(void *context, void *entry_point, void *stack_top)
+void hal_context_init(void *context, void *entry_point, void *stack_top, void *arg)
 {
     if (!context) return;
-    
+
     memzero(context, sizeof(hal_context_t));
-    
+
     hal_context_t *ctx = (hal_context_t*)context;
     ctx->sp = (u64)stack_top;
     ctx->pc = (u64)entry_point;
-    
+
     if (g_arch_ops && g_arch_ops->context_init_flags) {
         ctx->flags = g_arch_ops->context_init_flags();
     }
-    
+
+    /* 通用参数存入 RDI (general_regs[0]) — 所有架构的约定 */
+    ctx->general_regs[0] = (u64)arg;
+
     if (g_arch_ops && g_arch_ops->context_init) {
         g_arch_ops->context_init(context, entry_point, stack_top);
     }

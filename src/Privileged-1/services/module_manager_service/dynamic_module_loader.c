@@ -242,13 +242,22 @@ static bool elf_calculate_segment_sizes(const elf64_ehdr_t *ehdr,
     return true;
 }
 
-#define MODULE_BUFFER_SIZE (4 * 1024 * 1024)  /* 4MB 模块缓冲区，支持更大模块 */
+/* 模块读取缓冲区 — 按需分配，用完即释放。
+ * 原来为静态 4MB 数组（占 .bss 绝大部分），改为指针后
+ * .bss 仅占 8 字节，实际内存在 dynamic_module_load_internal
+ * 首次需要时通过 module_memory_alloc 分配。 */
+#define MODULE_BUFFER_SIZE (4 * 1024 * 1024)  /* 4MB 模块缓冲区 */
+static uint8_t *g_module_buffer = NULL;
 
-static dynamic_load_ctx_t g_load_ctx;
-static uint8_t g_module_buffer[MODULE_BUFFER_SIZE]; /* 模块缓冲区 */
+static dynamic_load_ctx_t g_load_ctx;  /* ~55KB .bss */
 
 /* 前向声明 */
 static hic_status_t dynamic_module_load_internal(dynamic_module_entry_t *entry);
+
+/* IPC 3.0 内核接口 — 由 init_launcher 加载时解析 */
+extern uint32_t ipc3_register_service(uint32_t, uint64_t, uint64_t, uint32_t *);
+extern uint64_t ipc3_get_entry_va(uint32_t);
+extern uint32_t ipc3_authorize(uint32_t, uint32_t);
 
 /* ========== 日志输出 ========== */
 
@@ -674,58 +683,17 @@ int dynamic_read_modules_list(dynamic_module_entry_t *entries, u32 max_entries)
     char list_buffer[4096];
     u32 bytes_read = 0;
     
-    /* 尝试通过 FAT32 服务读取 */
+    /* 尝试通过 FAT32 服务读取（先试长文件名，再试 8.3 短名） */
     int result = fat32_read_file("/modules.list", list_buffer, sizeof(list_buffer) - 1, &bytes_read);
-    
     if (result != 0 || bytes_read == 0) {
-        log_info("无法读取 modules.list，使用内置默认列表");
-        
-        /* 使用内置默认模块列表 */
-        const char *default_modules[] = {
-            "fat32_service",
-            "module_manager_service",
-            "config_service",
-            "vga_service",
-            "serial_service",
-            "crypto_service",
-            "password_manager_service",
-            "lib_manager_service",
-            "cli_service",
-            "libc_service",
-        };
-        int default_count = sizeof(default_modules) / sizeof(default_modules[0]);
-        
-        u32 count = 0;
-        for (int i = 0; i < default_count && count < max_entries; i++) {
-            /* 复制名称 */
-            int j;
-            for (j = 0; default_modules[i][j] && j < 63; j++) {
-                entries[count].name[j] = default_modules[i][j];
-            }
-            entries[count].name[j] = '\0';
-            
-            /* 设置路径 */
-            const char *path_prefix = "/modules/";
-            int offset = 0;
-            for (int k = 0; path_prefix[k]; k++) {
-                entries[count].path[offset++] = path_prefix[k];
-            }
-            for (int k = 0; entries[count].name[k]; k++) {
-                entries[count].path[offset++] = entries[count].name[k];
-            }
-            const char *suffix = ".hicmod";
-            for (int k = 0; suffix[k]; k++) {
-                entries[count].path[offset++] = suffix[k];
-            }
-            entries[count].path[offset] = '\0';
-            
-            entries[count].state = DLOAD_PENDING;
-            count++;
-        }
-        
-        return (int)count;
+        result = fat32_read_file("/MODULES.LIS", list_buffer, sizeof(list_buffer) - 1, &bytes_read);
     }
-    
+
+    if (result != 0 || bytes_read == 0) {
+        log_info("modules.list 不存在，无动态模块可加载");
+        return 0;
+    }
+
     /* 解析文件内容 */
     list_buffer[bytes_read] = '\0';
     
@@ -874,15 +842,9 @@ hic_status_t dynamic_create_sandbox(const void *module_data, u32 module_size,
     }
     entry->domain = new_domain;
     
-    /* 创建端点 */
-    uint32_t new_endpoint = 0;
-    result = module_cap_create_endpoint(new_domain, &new_endpoint);
-    if (result != 0) {
-        log_error("创建端点失败");
-        return HIC_OUT_OF_MEMORY;
-    }
-    entry->endpoint = new_endpoint;
-    
+    /* 端点由后面的 ipc3_register_service 创建 */
+    entry->endpoint = 0;
+
     u64 code_size, data_size, total_size;
     uint64_t phys_addr = 0;
     
@@ -905,12 +867,26 @@ hic_status_t dynamic_create_sandbox(const void *module_data, u32 module_size,
             return HIC_OUT_OF_MEMORY;
         }
         
-        /* 复制代码段 */
+        /* 复制代码段（即 ELF .o 文件） */
         const uint8_t *code_src = (const uint8_t *)module_data + sizeof(hicmod_header_t);
         module_memcpy((void *)phys_addr, code_src, code_size);
-        
-        /* 入口点在代码段起始 */
-        entry->entry_point = phys_addr;
+
+        /* 找到 service_start 在 ELF 中的文件偏移作为线程入口 */
+        {
+            uint64_t eo = elf_find_entry_point((const void *)(uintptr_t)phys_addr);
+            entry->entry_point = phys_addr + 0x40 + eo;
+        }
+
+        /* 创建 IPC 端点（用模块入口做 business_entry） */
+        {
+            uint32_t svc_id = 0;
+            uint32_t st = ipc3_register_service(entry->domain, phys_addr, 0, &svc_id);
+            if (st == 0 && svc_id != 0) {
+                entry->endpoint = svc_id;
+                log_info("IPC endpoint created\n");
+            }
+        }
+
         entry->code_base = phys_addr;
         entry->code_size = code_size;
         
@@ -1109,6 +1085,43 @@ hic_status_t dynamic_start_module(dynamic_module_entry_t *entry)
     
     return HIC_SUCCESS;
 }
+
+/* ==================== ELF 重定位（子模块符号解析） ==================== */
+
+/*
+ * 动态加载的子模块（.hicmod / .o）中的外部符号需要被解析。
+ * 此处维护一个符号表，映射符号名 → 内核函数地址。
+ * 这些函数地址在模块管理器自身加载时已被 init_launcher 的重定位解析好，
+ * 因此可以直接取函数指针存入子模块的代码中。
+ */
+
+/* ELF64 重定位条目 */
+typedef struct {
+    uint64_t r_offset;
+    uint64_t r_info;
+    int64_t  r_addend;
+} elf64_rela_t;
+
+#define ELF64_R_SYM(i)  ((i) >> 32)
+#define ELF64_R_TYPE(i) ((i) & 0xffffffff)
+
+/* x86_64 重定位类型 */
+#define R_X86_64_NONE           0
+#define R_X86_64_64             1
+#define R_X86_64_PC32           2
+#define R_X86_64_RELATIVE       8
+#define R_X86_64_32             10
+#define R_X86_64_32S            11
+#define R_X86_64_PLT32          4
+
+/* 所需 ELF 常量和结构体已在文件头部定义 */
+
+/**
+ * 查找外部符号地址
+ *
+ * 子模块引用的内核函数（memset、strcmp 等）在模块管理器加载时
+ * 已被 init_launcher 解析。此处直接取其函数指针作为地址。
+ */
 
 /* ==================== 依赖管理 ==================== */
 
@@ -1440,6 +1453,39 @@ int dynamic_module_load_all(void)
         }
     }
     
+    /* 模块参数 ABI：写 struct module_abi 到每个模块代码的固定偏移。
+     * 所有域共享的物理页也在此时分配。
+     * 布局（x86_64 ELF header 未用区域 0x20-0x3F，共 32 字节）：
+     *   +0x00: code_base     phys_addr of module code
+     *   +0x08: partner_entry IPC entry_va of partner module
+     *   +0x10: shmem_addr    shared ring buffer phys addr */
+    {
+        uint64_t shmem_phys = 0;
+        if (module_memory_alloc(0, 4096, 0, &shmem_phys) == 0 && shmem_phys)
+            module_memset((void *)(uintptr_t)shmem_phys, 0, 4096);
+
+        uint64_t prev_entry = 0;
+        uint32_t prev_domain = 0;
+        for (u32 i = 0; i < g_load_ctx.entry_count; i++) {
+            dynamic_module_entry_t *e = &g_load_ctx.entries[i];
+            if (e->state != DLOAD_RUNNING || !e->endpoint || !e->code_base) continue;
+
+            uint64_t this_entry = ipc3_get_entry_va(e->endpoint);
+
+            /* 写 struct module_abi 到 phys_addr + 0x20 */
+            volatile uint64_t *abi = (volatile uint64_t *)(uintptr_t)(e->code_base + 0x20);
+            abi[0] = e->code_base;          /* code_base */
+            abi[1] = prev_entry;            /* partner_entry (0 for first module) */
+            abi[2] = shmem_phys;            /* shmem_addr (0 if alloc failed) */
+
+            if (prev_entry && this_entry)
+                ipc3_authorize(e->endpoint, prev_domain);
+
+            prev_entry = this_entry;
+            prev_domain = e->domain;
+        }
+    }
+
     log_info("模块加载完成");
     return (int)g_load_ctx.loaded_count;
 }
@@ -1449,18 +1495,32 @@ int dynamic_module_load_all(void)
  */
 static hic_status_t dynamic_module_load_internal(dynamic_module_entry_t *entry)
 {
+    /* 按需分配模块读取缓冲区 */
+    if (!g_module_buffer) {
+        uint64_t buf_phys = 0;
+        uint64_t ret = module_memory_alloc(0 /*Core-0域*/, MODULE_BUFFER_SIZE,
+                                            MODULE_PAGE_DATA, &buf_phys);
+        if (ret != 0 || buf_phys == 0) {
+            log_error("无法分配模块读取缓冲区");
+            entry->last_error = HIC_OUT_OF_MEMORY;
+            return HIC_OUT_OF_MEMORY;
+        }
+        g_module_buffer = (uint8_t *)(uintptr_t)buf_phys;
+        log_info("模块缓冲区已分配");
+    }
+
     /* 步骤1: 读取模块文件 */
     entry->state = DLOAD_READING;
     u32 bytes_read = 0;
-    
-    hic_status_t status = dynamic_read_module_file(entry->path, g_module_buffer, 
-                                                    sizeof(g_module_buffer), 
+
+    hic_status_t status = dynamic_read_module_file(entry->path, g_module_buffer,
+                                                    MODULE_BUFFER_SIZE,
                                                     &bytes_read);
     if (status != HIC_SUCCESS) {
         entry->last_error = status;
         return status;
     }
-    
+
     /* 步骤2: 验证签名 */
     entry->state = DLOAD_VERIFYING;
     status = dynamic_verify_module(g_module_buffer, bytes_read);
@@ -1468,7 +1528,7 @@ static hic_status_t dynamic_module_load_internal(dynamic_module_entry_t *entry)
         entry->last_error = status;
         return status;
     }
-    
+
     /* 步骤3: 创建沙箱 */
     entry->state = DLOAD_CREATING;
     status = dynamic_create_sandbox(g_module_buffer, bytes_read, entry);
@@ -1476,7 +1536,7 @@ static hic_status_t dynamic_module_load_internal(dynamic_module_entry_t *entry)
         entry->last_error = status;
         return status;
     }
-    
+
     /* 步骤4: 启动模块 */
     entry->state = DLOAD_STARTING;
     status = dynamic_start_module(entry);
@@ -1484,7 +1544,7 @@ static hic_status_t dynamic_module_load_internal(dynamic_module_entry_t *entry)
         entry->last_error = status;
         return status;
     }
-    
+
     entry->state = DLOAD_RUNNING;
     return HIC_SUCCESS;
 }

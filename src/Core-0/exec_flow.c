@@ -36,6 +36,20 @@ extern void context_switch(void *prev, void *next);
 /* Current EFC (EXEC_FLOW_INVALID if not in EFC context) */
 exec_flow_id_t g_current_efc = EXEC_FLOW_INVALID;
 
+/* thread_id → efc_id 映射，供 schedule() 查找 EFC */
+static exec_flow_id_t g_thread_efc[MAX_THREADS];
+
+/* Initialize mapping */
+void exec_flow_init(void) {
+    for (u32 i = 0; i < MAX_THREADS; i++) g_thread_efc[i] = EXEC_FLOW_INVALID;
+}
+
+/* Find EFC ID for a thread, or EXEC_FLOW_INVALID */
+exec_flow_id_t exec_flow_id_for_thread(thread_id_t tid) {
+    if (tid >= MAX_THREADS) return EXEC_FLOW_INVALID;
+    return g_thread_efc[tid];
+}
+
 /* ==================== Internal Helpers ==================== */
 
 /* Check if a capability ID refers to a valid, non-revoked TYPE_THREAD cap */
@@ -78,6 +92,7 @@ hic_status_t exec_flow_create(domain_id_t domain, virt_addr_t entry,
     }
 
     *out = cap;
+    if (tid < MAX_THREADS) g_thread_efc[tid] = cap;
 
     console_puts("[EFC] Created EFC ");
     console_putu32(cap);
@@ -97,6 +112,7 @@ hic_status_t exec_flow_destroy(exec_flow_id_t efc)
     }
 
     thread_id_t tid = efc_get_thread(efc);
+    if (tid < MAX_THREADS) g_thread_efc[tid] = EXEC_FLOW_INVALID;
     if (tid != INVALID_THREAD && tid < MAX_THREADS) {
         thread_terminate(tid);
     }
@@ -136,7 +152,7 @@ hic_status_t exec_flow_dispatch(exec_flow_id_t efc, logical_core_id_t lcore)
     g_current_thread = next;
     g_current_efc = efc;
 
-    /* Context switch: returns in the target EFC's context */
+    /* context_switch 在 .L_restore 中已 sti，确保新线程 IF=1 */
     context_switch(prev, next);
 
     /*

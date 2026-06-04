@@ -53,54 +53,64 @@ IRQ_ENTRY 45
 IRQ_ENTRY 46
 IRQ_ENTRY 47
 
-/* ==================== 快速中断处理存根 ==================== */
-/* 快速中断处理存根（仅保存必要寄存器）
- * 注意：调用前必须已压入向量号（见上面的 IRQ_ENTRY 宏）
- * 
- * 重要：此存根仅用于 IRQ（硬件中断），不用于异常！
- * 异常使用 interrupts.S 中的 isr_common_stub，支持错误码。
+/* ==================== 快速中断处理存根（支持抢占调度） ==================== */
+/*
+ * IRQ 入口存根 — 保存全部 GP 寄存器、调用分发、检查抢占。
+ *
+ * 抢占调度原理：
+ *   1. irq_dispatch 发货 EOI 并执行 handler
+ *   2. handler（scheduler_tick）只设 g_reschedule_needed 标志
+ *   3. 返回汇编后检查标志，若需抢占则调用 schedule()
+ *   4. schedule() 调用 context_switch 切换到新线程
+ *   5. 切回来后通过正常 register restore + iretq 返回被中断的代码
+ *
+ * 栈布局（从低到高，即 RSP 向上增长）：
+ *   低地址 ──────── RSP
+ *   R15-R8, RBP, RDI, RSI, RDX, RCX, RBX, RAX   <- 15 个保存的 GP 寄存器
+ *   向量号                                        <- IRQ_ENTRY 宏压入
+ *   RIP, CS, RFLAGS                              <- CPU 压入（IRQ 帧）
+ *   高地址 ────────
+ *
+ * 向量号偏移：RSP + 15*8 = RSP + 120
  */
 .global isr_fast_stub
 isr_fast_stub:
-    /* 仅保存关键寄存器（快速路径） */
-    pushq %rax           /* RAX: 系统调用号/返回值 */
-    pushq %rbx           /* RBX: 被调用者保存 */
-    pushq %rcx           /* RCX: 用于iretq返回地址 */
-    pushq %rdx           /* RDX: 参数 */
-    pushq %rsi           /* RSI: 参数 */
-    pushq %rdi           /* RDI: 参数 */
-    pushq %rbp           /* RBP: 栈指针 */
+    /* ==== 保存全部 15 个通用寄存器 ==== */
+    pushq %rax
+    pushq %rbx
+    pushq %rcx
+    pushq %rdx
+    pushq %rsi
+    pushq %rdi
+    pushq %rbp
+    pushq %r8
+    pushq %r9
+    pushq %r10
+    pushq %r11
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
 
-    /* 从栈中获取IRQ向量号
-     * 
-     * 栈布局（从高地址到低地址，即从栈底到栈顶）：
-     * 
-     *   高地址 ─────────────────────────────
-     *   RFLAGS        <- CPU压入（中断发生时）
-     *   CS            <- CPU压入
-     *   RIP           <- CPU压入（中断返回地址）
-     *   向量号        <- IRQ_ENTRY宏压入 (pushq $num)
-     *   RAX           <- pushq %rax
-     *   RBX           <- pushq %rbx
-     *   RCX           <- pushq %rcx
-     *   RDX           <- pushq %rdx
-     *   RSI           <- pushq %rsi
-     *   RDI           <- pushq %rdi
-     *   RBP           <- pushq %rbp <-- 当前 RSP
-     *   低地址 ─────────────────────────────
-     *
-     * 偏移计算：
-     *   向量号 = RSP + 7*8 = RSP + 56
-     * 
-     * 警告：若修改压入的寄存器数量，必须同步更新偏移！
-     * 定义常量可避免此问题，但会增加代码复杂度。
-     */
-    movq 56(%rsp), %rdi
+    /* 从栈中获取 IRQ 向量号（偏移 15*8 = 120） */
+    movq 120(%rsp), %rdi
 
-    /* 调用中断分发函数 */
+    /* 调用中断分发函数（内部已发 EOI） */
     call irq_dispatch
 
-    /* 恢复寄存器 */
+    /* 清除抢占标志（协作调度 — 线程通过 yield 主动切换） */
+    movl $0, g_reschedule_needed(%rip)
+
+.L_fast_restore:
+    /* 恢复全部 15 个通用寄存器 */
+    popq %r15
+    popq %r14
+    popq %r13
+    popq %r12
+    popq %r11
+    popq %r10
+    popq %r9
+    popq %r8
     popq %rbp
     popq %rdi
     popq %rsi
@@ -109,7 +119,7 @@ isr_fast_stub:
     popq %rbx
     popq %rax
 
-    /* 恢复向量号（弹栈，iretq时CPU会处理剩余的RIP, CS, RFLAGS） */
+    /* 恢复向量号 */
     addq $8, %rsp
 
     iretq

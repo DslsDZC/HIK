@@ -1,0 +1,74 @@
+ARCH ?= stm32f103
+# 使用 ARM 交叉编译器
+PREFIX = arm-none-eabi-
+CC = $(PREFIX)gcc
+LD = $(PREFIX)gcc
+OBJCOPY = $(PREFIX)objcopy
+SIZE  = $(PREFIX)size
+ROOT = $(CURDIR)
+CORE0 = $(ROOT)/src/Core-0
+BUILD = $(O)
+
+# STM32F103C8T6 编译标志
+CFLAGS = -mcpu=cortex-m3 -mthumb -msoft-float -ffreestanding -nostdlib \
+         -fno-stack-protector -fno-builtin -fno-pie -fno-exceptions \
+         -Wall -Wextra -Wno-unused-parameter \
+         -I$(CORE0) -I$(CORE0)/include -I$(CORE0)/lib -I$(CORE0)/arch/stm32f103 \
+         -DCONFIG_STM32F103=1 -DCONFIG_MMU=0 -DCONFIG_DEBUG=1
+
+LDFLAGS = -nostdlib -Wl,-T,$(CORE0)/arch/stm32f103/linker.ld -Wl,--gc-sections
+
+CORE_SRC = $(filter-out %/gen_tlv.c, $(wildcard $(CORE0)/*.c))
+LIB_SRC  = $(wildcard $(CORE0)/lib/*.c)
+ARCH_C   = $(wildcard $(CORE0)/arch/stm32f103/*.c)
+ARCH_S   = $(wildcard $(CORE0)/arch/stm32f103/*.S)
+CORE_OBJ = $(addprefix $(BUILD)/, $(notdir $(CORE_SRC:.c=.o)))
+LIB_OBJ  = $(addprefix $(BUILD)/, $(notdir $(LIB_SRC:.c=.o)))
+ARCH_OBJ = $(addprefix $(BUILD)/a_, $(notdir $(ARCH_C:.c=.o)))
+ASM_OBJ  = $(foreach f,$(ARCH_S),$(BUILD)/asm_$(notdir $(basename $f)).o)
+TARGET   = $(BUILD)/hic-kernel.elf
+BIN      = $(BUILD)/hic-kernel.bin
+
+# 全局源文件与动态模块（STM32 不用）
+STATIC_MOD_GEN =
+P1_SRCS =
+P1_OBJ  =
+
+all: $(TARGET) $(BIN) size
+
+# 编译规则
+$(BUILD)/%.o: $(CORE0)/%.c ; mkdir -p $(BUILD) && $(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/%.o: $(CORE0)/lib/%.c ; mkdir -p $(BUILD) && $(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/a_%.o: $(CORE0)/arch/stm32f103/%.c ; mkdir -p $(BUILD) && $(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/asm_%.o: $(CORE0)/arch/stm32f103/%.S ; mkdir -p $(BUILD) && $(CC) $(CFLAGS) -c $< -o $@
+
+$(TARGET): $(CORE_OBJ) $(LIB_OBJ) $(ARCH_OBJ) $(ASM_OBJ)
+	$(LD) $(LDFLAGS) $^ -o $@
+
+$(BIN): $(TARGET)
+	$(OBJCOPY) -O binary $< $@
+
+# 二进制大小
+size: $(TARGET)
+	$(SIZE) $(TARGET)
+
+# QEMU 仿真（使用 xPack 的 QEMU ARM 或系统 QEMU）
+QEMU = qemu-system-arm
+
+qemu: $(TARGET)
+	$(QEMU) -M stm32-h103 \
+		-kernel $(TARGET) \
+		-nographic \
+		-serial mon:stdio \
+		-no-reboot \
+		-d int,cpu_reset \
+		-D qemu_debug.log
+
+# 运行（作用于 qemu 相同）
+run: qemu
+
+clean:
+	rm -f $(BUILD)/*.o $(TARGET) $(BIN)
+	rm -f qemu_serial.log qemu_debug.log
+
+.PHONY: all clean size qemu run

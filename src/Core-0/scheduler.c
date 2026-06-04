@@ -22,6 +22,7 @@
 #include "types.h"
 #include "atomic.h"
 #include "hal.h"
+#include "exec_flow.h"
 #include "lib/mem.h"
 #include "lib/console.h"
 #include "logical_core.h"
@@ -75,6 +76,8 @@ void scheduler_init(void)
 {
     console_puts("[SCHED] Initializing minimal scheduler (mechanism only)\n");
 
+    exec_flow_init();
+
     g_current_thread = NULL;
 
     /* Initialize idle thread */
@@ -112,7 +115,18 @@ thread_t *schedule(void)
         return next;
     }
 
-    /* Transition states */
+    /* === EFC path: use exec_flow_dispatch for threads with capability === */
+    if (next != &idle_thread && next->thread_id < MAX_THREADS) {
+        exec_flow_id_t efc = exec_flow_id_for_thread(next->thread_id);
+        if (efc != EXEC_FLOW_INVALID) {
+            atomic_exit_critical(irq_state);
+            /* exec_flow_dispatch does: state transitions + context_switch + CR3 */
+            exec_flow_dispatch(efc, 0);
+            return next;
+        }
+    }
+
+    /* === Fallback: direct context_switch (idle thread / pre-EFC threads) === */
     if (prev != NULL && prev->state == THREAD_STATE_RUNNING && prev != &idle_thread) {
         prev->state = THREAD_STATE_READY;
     }
@@ -124,7 +138,6 @@ thread_t *schedule(void)
 
     atomic_exit_critical(irq_state);
 
-    /* Context switch */
     context_switch(prev, next);
 
     return next;

@@ -220,9 +220,10 @@ static inline void mod_serial_puts(const char *msg) {
 
 /* 内联暂停指令 - 让出 CPU */
 static inline void mod_pause_loop(void) {
-    /* 使用 PAUSE 指令循环，等待中断 */
+    extern void module_thread_yield(void);
     while (1) {
-        __asm__ volatile ("pause; hlt");
+        for (volatile int i = 0; i < 100000; i++) __asm__ volatile("pause");
+        module_thread_yield();
     }
 }
 

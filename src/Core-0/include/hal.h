@@ -32,6 +32,7 @@ typedef enum {
     HAL_ARCH_X86_64,
     HAL_ARCH_ARM64,
     HAL_ARCH_RISCV64,
+    HAL_ARCH_STM32F103,  /* Cortex-M3 @ STM32F103C8T6 */
     HAL_ARCH_MAX
 } hal_arch_type_t;
 
@@ -166,8 +167,12 @@ void hal_context_switch(void* prev, void* next);
 
 /**
  * 初始化线程上下文
+ * @param context    架构上下文指针
+ * @param entry_point 线程入口
+ * @param stack_top   栈顶
+ * @param arg         通用参数（RDI 传入，无参数传 NULL）
  */
-void hal_context_init(void* context, void* entry_point, void* stack_top);
+void hal_context_init(void* context, void* entry_point, void* stack_top, void* arg);
 
 /**
  * 保存上下文

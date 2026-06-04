@@ -111,13 +111,34 @@ def create_fat32_image(disk_path, bootloader_path, kernel_path,
             ])
             for f in module_files:
                 src = os.path.join(modules_dir, f)
-                dest = f'::modules/{f}'
-                print(f"  复制模块: {f}")
+                # FAT32 驱动不支持长文件名，用 8.3 短名：名(≤8).扩展名(≤3)
+                base = f.replace('.hicmod', '')[:8].upper()
+                ext = 'HIC'  # .hicmod → HIC
+                fat_name = f"{base}.{ext}"
+                dest = f'::modules/{fat_name}'
+                print(f"  复制模块: {f} → {fat_name}")
                 subprocess.run([
                     'mcopy', '-i', disk_path, src, dest
                 ], check=True)
 
             print(f"  共复制 {len(module_files)} 个模块文件")
+
+            # 自动生成 MODULES.LIS（排除已在运行的模块管理器）
+            modules_list = ""
+            for f in module_files:
+                if f.startswith('module_manager'): continue
+                mod_name = f.replace('.hicmod', '')[:8].upper()
+                modules_list += f"{mod_name} auto:yes\n"
+            list_tmp = '/tmp/hic_MODULES.LIS'
+            with open(list_tmp, 'w') as fh:
+                fh.write(modules_list)
+            # 同时写入 long 和 short 两种名字，以便驱动兼容
+            for dest in ['::modules.list', '::MODULES.LIS']:
+                subprocess.run([
+                    'mcopy', '-i', disk_path, list_tmp, dest
+                ], check=True)
+            os.unlink(list_tmp)
+            print(f"  已生成 modules.list ({len(module_files)} 个模块)")
 
         print(f"✓ 磁盘镜像创建成功: {disk_path}")
         return True

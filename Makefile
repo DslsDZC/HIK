@@ -10,4 +10,6 @@ ifeq ($(ARCH),x86_64)
 include Makefile.x86_64
 else ifeq ($(ARCH),arm64)
 include Makefile.arm64
+else ifeq ($(ARCH),stm32f103)
+include Makefile.stm32f103
 endif

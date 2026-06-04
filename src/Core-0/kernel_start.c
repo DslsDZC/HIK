@@ -26,9 +26,14 @@ void kernel_start(void) {
     hal_init();
     hal_uart_init(NULL);
 
+    /*
+     * 解析 bootloader 传递的 TLV 引导信息。
+     * 若 bootloader 未提供（如 STM32 直接启动、QEMU 直启内核），
+     * 使用最小引导信息初始化默认内存布局。
+     */
     boot_info_parse_tlv();
     if (g_boot_info == NULL) {
-        while (1) hal_halt();
+        boot_info_init_minimal();
     }
 
     kernel_main();

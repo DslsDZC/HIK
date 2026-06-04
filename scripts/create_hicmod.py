@@ -292,31 +292,56 @@ def find_elf_entry_offset(obj_data):
     return 0
 
 
+def get_elf_bss_size(obj_data):
+    """从 ELF 目标文件中提取 .bss 段大小"""
+    if obj_data[:4] != b'\x7fELF':
+        return 0
+    ei_class = obj_data[4]
+    if ei_class != 2:  # ELFCLASS64
+        return 0
+
+    e_shoff = struct.unpack_from('<Q', obj_data, 40)[0]
+    e_shentsize = struct.unpack_from('<H', obj_data, 58)[0]
+    e_shnum = struct.unpack_from('<H', obj_data, 60)[0]
+
+    for i in range(e_shnum):
+        sh_off = e_shoff + i * e_shentsize
+        sh_type = struct.unpack_from('<I', obj_data, sh_off + 4)[0]
+        if sh_type == 8:  # SHT_NOBITS
+            sh_size = struct.unpack_from('<Q', obj_data, sh_off + 32)[0]
+            if sh_size > 0:
+                return sh_size
+    return 0
+
+
 def build_arch_section(arch_id, obj_data, offset_base):
     """
     构建架构段数据
-    
+
     返回: (arch_section_bytes, total_size)
     """
     # 从 ELF 中提取入口点偏移
     entry_offset = find_elf_entry_offset(obj_data)
-    
+
+    # 从 ELF 中提取 .bss 段大小
+    bss_size = get_elf_bss_size(obj_data)
+
     # 架构段头
     section = bytearray(HICMOD_ARCH_SECTION_SIZE)
-    
+
     struct.pack_into('<I', section, 0, arch_id)           # arch_id
     struct.pack_into('<I', section, 4, 0)                  # flags
     struct.pack_into('<I', section, 8, offset_base)        # code_offset
     struct.pack_into('<I', section, 12, len(obj_data))     # code_size
     struct.pack_into('<I', section, 16, 0)                 # data_offset
     struct.pack_into('<I', section, 20, 0)                 # data_size
-    struct.pack_into('<I', section, 24, 0)                 # bss_size
+    struct.pack_into('<I', section, 24, bss_size)          # bss_size
     struct.pack_into('<I', section, 28, 0)                 # rodata_offset
     struct.pack_into('<I', section, 32, 0)                 # rodata_size
     struct.pack_into('<I', section, 36, entry_offset)      # entry_offset
     struct.pack_into('<I', section, 40, 0)                 # reloc_offset
     struct.pack_into('<I', section, 44, 0)                 # reloc_count
-    
+
     return bytes(section), len(obj_data)
 
 
@@ -406,7 +431,10 @@ def create_hicmod_multiarch(arch_specs, txt_path, output_path,
     for i, (arch_id, obj_data, obj_path) in enumerate(arch_data_list):
         # 从 ELF 中提取入口点偏移
         entry_offset = find_elf_entry_offset(obj_data)
-        
+
+        # 从 ELF 中提取 .bss 段大小（运行时必须额外分配）
+        bss_size = get_elf_bss_size(obj_data)
+
         # 构建架构段头
         section = bytearray(HICMOD_ARCH_SECTION_SIZE)
         struct.pack_into('<I', section, 0, arch_id)           # arch_id
@@ -415,7 +443,7 @@ def create_hicmod_multiarch(arch_specs, txt_path, output_path,
         struct.pack_into('<I', section, 12, len(obj_data))     # code_size
         struct.pack_into('<I', section, 16, 0)                 # data_offset
         struct.pack_into('<I', section, 20, 0)                 # data_size
-        struct.pack_into('<I', section, 24, 0)                 # bss_size
+        struct.pack_into('<I', section, 24, bss_size)          # bss_size
         struct.pack_into('<I', section, 28, 0)                 # rodata_offset
         struct.pack_into('<I', section, 32, 0)                 # rodata_size
         struct.pack_into('<I', section, 36, entry_offset)      # entry_offset

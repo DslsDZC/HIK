@@ -397,6 +397,15 @@ extern uint64_t module_domain_start(uint32_t, uint64_t);
 extern void *module_memcpy(void *, const void *, size_t);
 extern void *module_memset(void *, int, size_t);
 extern uint64_t module_memory_alloc(uint32_t, uint64_t, uint32_t, uint64_t *);
+extern void module_thread_yield(void);
+extern uint32_t shmem_alloc(uint32_t, unsigned long, uint32_t, uint32_t *, uint64_t *);
+extern uint32_t shmem_map(uint32_t, uint32_t, uint32_t, uint32_t, uint64_t *);
+
+/* IPC 3.0 内核接口 */
+extern uint32_t ipc3_register_service(uint32_t, uint64_t, uint64_t, uint32_t *);
+extern uint64_t ipc3_get_entry_va(uint32_t);
+extern uint32_t ipc3_unregister_service(uint32_t);
+extern uint32_t ipc3_authorize(uint32_t, uint32_t);
 
 /* 未实现的符号 - 提供占位符 */
 static void __stub_domain_parallel_create(void) { }
@@ -439,6 +448,14 @@ static uint64_t find_external_symbol(const char *name) {
         {"domain_atomic_switch", (uint64_t)__stub_domain_atomic_switch},
         {"domain_graceful_shutdown", (uint64_t)__stub_domain_graceful_shutdown},
         {"sha384_hash", (uint64_t)__stub_sha384_hash},
+        /* IPC 3.0 */
+        {"ipc3_register_service", (uint64_t)ipc3_register_service},
+        {"ipc3_get_entry_va",     (uint64_t)ipc3_get_entry_va},
+        {"ipc3_unregister_service",(uint64_t)ipc3_unregister_service},
+        {"module_thread_yield",     (uint64_t)module_thread_yield},
+        {"shmem_alloc",             (uint64_t)shmem_alloc},
+        {"shmem_map",               (uint64_t)shmem_map},
+        {"ipc3_authorize",          (uint64_t)ipc3_authorize},
         {NULL, 0}
     };
     
@@ -465,79 +482,86 @@ static uint64_t find_external_symbol(const char *name) {
  * 
  * 返回: 0 成功，非零失败
  */
-static int apply_elf_relocations(uint8_t *elf_base, size_t elf_size) {
+static int apply_elf_relocations(uint8_t *elf_base, size_t elf_size, uint64_t bss_base_offset) {
     const elf64_ehdr_t *ehdr = (const elf64_ehdr_t *)elf_base;
-    
+
     if (ehdr->e_shoff == 0 || ehdr->e_shoff >= elf_size) {
         launcher_log("No section headers for relocation");
         return 0;  /* 没有节头表，可能不需要重定位 */
     }
-    
+
     const elf64_shdr_t *shdrs = (const elf64_shdr_t *)(elf_base + ehdr->e_shoff);
-    
+
     /* 查找符号表、字符串表和重定位节 */
     const elf64_shdr_t *symtab = NULL;
     const elf64_shdr_t *strtab = NULL;
     const elf64_shdr_t *shstrtab = NULL;
     uint32_t symtab_link = 0;
-    
+
+    /* 扫描节头：记录 NOBITS (BSS) 节索引及其文件偏移；
+     * 由于 init_launcher 在代码段之后额外分配并清零了 .bss，
+     * 实际 .bss 基址 = elf_base + 代码段页对齐大小，
+     * 而符号表中 .bss 符号的地址=章节文件偏移+符号值显然不正确。
+     * 因此需要根据节类型（SHT_NOBITS）修正 S 计算。 */
+    uint16_t bss_shndx = 0;
+
     /* 首先获取节名字符串表 */
     if (ehdr->e_shstrndx < ehdr->e_shnum) {
         shstrtab = &shdrs[ehdr->e_shstrndx];
     }
-    
+
     for (int i = 0; i < ehdr->e_shnum; i++) {
         uint32_t sh_type;
         module_memcpy(&sh_type, &shdrs[i].sh_type, sizeof(uint32_t));
-        
+
         if (sh_type == SHT_SYMTAB) {
             symtab = &shdrs[i];
             module_memcpy(&symtab_link, &shdrs[i].sh_link, sizeof(uint32_t));
         }
     }
-    
+
     if (!symtab) {
         launcher_log("No symbol table found");
         return 0;  /* 没有符号表 */
     }
-    
+
     /* 获取关联的字符串表 */
     if (symtab_link < (uint32_t)ehdr->e_shnum) {
         strtab = &shdrs[symtab_link];
     }
-    
+
     if (!strtab) {
         launcher_log("No string table found");
         return -1;
     }
-    
+
     const elf64_sym_t *syms = (const elf64_sym_t *)(elf_base + symtab->sh_offset);
     int num_syms = symtab->sh_size / sizeof(elf64_sym_t);
     const char *strtab_data = (const char *)(elf_base + strtab->sh_offset);
     const char *shstrtab_data = shstrtab ? (const char *)(elf_base + shstrtab->sh_offset) : NULL;
-    
+
     int reloc_count = 0;
     int ext_reloc_count = 0;
     int error_count = 0;
-    
+
     /* 遍历所有节，查找 RELA 节 */
     for (int i = 0; i < ehdr->e_shnum; i++) {
         uint32_t sh_type;
         module_memcpy(&sh_type, &shdrs[i].sh_type, sizeof(uint32_t));
-        
+
         if (sh_type != SHT_RELA) continue;
-        
+
         uint32_t sh_info;
         module_memcpy(&sh_info, &shdrs[i].sh_info, sizeof(uint32_t));
-        
+
         /* 检查目标节是否有效 */
         if (sh_info >= (uint32_t)ehdr->e_shnum) continue;
-        
+
         /* 获取目标节的信息 */
         uint64_t target_offset, target_size;
         module_memcpy(&target_offset, &shdrs[sh_info].sh_offset, sizeof(uint64_t));
         module_memcpy(&target_size, &shdrs[sh_info].sh_size, sizeof(uint64_t));
-        
+
         /* 跳过 .eh_frame 的重定位 */
         if (shstrtab_data) {
             uint32_t sh_name;
@@ -548,34 +572,34 @@ static int apply_elf_relocations(uint8_t *elf_base, size_t elf_size) {
                 continue;
             }
         }
-        
+
         const elf64_rela_t *relas = (const elf64_rela_t *)(elf_base + shdrs[i].sh_offset);
         int num_relas = shdrs[i].sh_size / sizeof(elf64_rela_t);
-        
+
         launcher_log("Processing .rela section...");
-        
+
         for (int j = 0; j < num_relas; j++) {
             uint64_t r_offset = relas[j].r_offset;
             uint64_t r_info = relas[j].r_info;
             int64_t r_addend = relas[j].r_addend;
-            
+
             uint32_t sym_idx = ELF64_R_SYM(r_info);
             uint32_t type = ELF64_R_TYPE(r_info);
-            
+
             if (sym_idx >= (uint32_t)num_syms) {
                 launcher_log("Invalid symbol index in relocation");
                 error_count++;
                 continue;
             }
-            
+
             /* 获取符号信息 */
             uint64_t sym_value;
             uint16_t sym_shndx;
             module_memcpy(&sym_value, &syms[sym_idx].st_value, sizeof(uint64_t));
             module_memcpy(&sym_shndx, &syms[sym_idx].st_shndx, sizeof(uint16_t));
-            
+
             const char *sym_name = strtab_data + syms[sym_idx].st_name;
-            
+
             /* 计算符号地址 S */
             uint64_t S;
             if (sym_shndx == 0) {
@@ -590,11 +614,22 @@ static int apply_elf_relocations(uint8_t *elf_base, size_t elf_size) {
                 ext_reloc_count++;
             } else {
                 /* 内部符号 - 需要找到符号所在节的文件偏移 */
-                /* sym_value 是节内偏移，需要加上节的文件偏移 */
                 if (sym_shndx < (uint16_t)ehdr->e_shnum) {
                     uint64_t sec_offset;
+                    uint32_t sec_type;
+                    module_memcpy(&sec_type, &shdrs[sym_shndx].sh_type, sizeof(uint32_t));
                     module_memcpy(&sec_offset, &shdrs[sym_shndx].sh_offset, sizeof(uint64_t));
-                    S = (uint64_t)elf_base + sec_offset + sym_value;
+
+                    if (sec_type == 8) {  /* SHT_NOBITS = .bss */
+                        /*
+                         * .bss 段由 init_launcher 在 code_pages 处额外分配。
+                         * 但文件中的 sh_offset 指向 ELF 内占位偏移，
+                         * 不用那个，改用传入的 bss_base_offset。
+                         */
+                        S = (uint64_t)elf_base + bss_base_offset + sym_value;
+                    } else {
+                        S = (uint64_t)elf_base + sec_offset + sym_value;
+                    }
                 } else {
                     launcher_log("Invalid section index for symbol");
                     error_count++;
@@ -725,7 +760,14 @@ int init_launcher_start(void) {
     if (result != 0 || bytes_read == 0) {
         launcher_log("Long filename not found, trying 8.3 short name...");
 
-        /* 尝试 FAT32 8.3 短文件名格式 */
+        /* FAT32 驱动 make_fat_name 生成的短名 */
+        module_path = "/modules/MODULE_M.HIC";
+        result = fat32_read_file(module_path, g_module_buffer,
+                                 MAX_MODULE_SIZE, &bytes_read);
+    }
+
+    if (result != 0 || bytes_read == 0) {
+        /* mkfs.vfat 生成的 ~1 短名 */
         module_path = "/modules/MODULE~1.HIC";
         result = fat32_read_file(module_path, g_module_buffer,
                                  MAX_MODULE_SIZE, &bytes_read);
@@ -734,16 +776,18 @@ int init_launcher_start(void) {
             launcher_log("ERROR: Failed to read module_manager.hicmod");
             launcher_log("Trying root path...");
 
-            /* 尝试根目录短文件名路径 */
             module_path = "/MODULE~1.HIC";
             result = fat32_read_file(module_path, g_module_buffer,
                                      MAX_MODULE_SIZE, &bytes_read);
+            if (result != 0 || bytes_read == 0) {
+                module_path = "/MODULE_M.HIC";
+                result = fat32_read_file(module_path, g_module_buffer,
+                                         MAX_MODULE_SIZE, &bytes_read);
+            }
 
             if (result != 0 || bytes_read == 0) {
                 launcher_log("ERROR: Module manager not found on disk");
                 launcher_log("Entering idle mode (services already running)");
-
-                /* 进入空闲模式 - 静态服务已经运行 */
                 while (1) {
                     module_thread_yield();
                 }
@@ -834,13 +878,14 @@ int init_launcher_start(void) {
     uint32_t code_size = arch_section->code_size;
     uint32_t entry_offset = arch_section->entry_offset;
     uint32_t data_size = arch_section->data_size;
-    uint32_t total_size = code_size + data_size;
+    uint32_t bss_size = arch_section->bss_size;
+    uint32_t total_size = code_size + data_size + bss_size;
 
     if (header->legacy_code_size > 0) {
         code_offset = header->legacy_code_offset;
         code_size = header->legacy_code_size;
         data_size = header->legacy_data_size;
-        total_size = code_size + data_size;
+        total_size = code_size + data_size + bss_size;
         launcher_log("Using legacy code fields from header");
     }
 
@@ -853,11 +898,22 @@ int init_launcher_start(void) {
         while (1) { __asm__ volatile("hlt"); }
     }
     module_memcpy((void*)(uintptr_t)phys_addr, g_module_buffer + code_offset, code_size);
+
+    /* 清零 .bss 段（紧接在代码段之后） */
+    {
+        uint32_t code_pages = (code_size + 4095) & ~4095U;
+        if (bss_size > 0) {
+            uint64_t bss_addr = phys_addr + code_pages;
+            module_memset((void*)(uintptr_t)bss_addr, 0, bss_size);
+            launcher_log_hex("BSS cleared, size: ", bss_size);
+        }
+    }
     launcher_log("Code loaded to physical memory");
 
     /* 步骤7.5: 应用 ELF 重定位 */
     launcher_log("Step 7.5: Applying ELF relocations...");
-    int reloc_result = apply_elf_relocations((uint8_t*)(uintptr_t)phys_addr, code_size);
+    uint32_t code_rounded = (code_size + 4095) & ~4095U;
+    int reloc_result = apply_elf_relocations((uint8_t*)(uintptr_t)phys_addr, code_size, code_rounded);
     if (reloc_result != 0)
         launcher_log_hex("WARNING: Relocation had errors: ", reloc_result);
     else

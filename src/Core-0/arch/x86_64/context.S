@@ -173,59 +173,47 @@ context_switch:
     subq $48, %rsp    /* 6 * 8 = 48 字节，为 callee-saved 寄存器预留空间 */
 
 .L_switch_to_new:
-    /* ===== CR3 切换逻辑（跨域线程切换）=====
-     * 关键：在保存完当前线程上下文后、恢复新线程上下文前切换页表
-     * 这样调度器 C 代码始终运行在 Core-0 页表下
-     * 只有新线程开始执行时才运行在其私有页表中
+    /* ===== 跨域线程切换 =====
+     * 顺序：1) 获取目标页表  2) 切换栈  3) 切换 CR3
+     * 先切栈再切 CR3，确保 CR3 切换时已在目标线程栈上。
      */
-    
-    /* 将 next 指针保存在 callee-saved 寄存器 %rbx 中
-     * 避免 CR3 切换后访问旧栈（旧栈在新域页表中不可见） */
+
+    /* 将 next 指针保存在 callee-saved 寄存器 %rbx 中 */
     movq %rsi, %rbx
 
-    /* 获取 next 线程的 domain_id (偏移 4) */
-    movl 4(%rbx), %edi           /* %edi = next->domain_id (zero-extended to 64-bit) */
+    /* 获取 next 线程的 domain_id */
+    movl 4(%rbx), %edi
+    cmpq $256, %rdi
+    jae .L_skip_cr3
 
-    /* 检查域ID是否有效 */
-    cmpq $256, %rdi              /* HIC_DOMAIN_MAX = 256 */
-    jae .L_skip_cr3_switch       /* 无效域ID，跳过CR3切换 */
-
-    /* 调用 domain_switch_get_pagetable(domain_id) */
     call domain_switch_get_pagetable
-
-    /* 检查返回的页表是否有效 */
     testq %rax, %rax
-    jz .L_skip_cr3_switch        /* NULL 页表，跳过切换（Core-0 域） */
+    jz .L_skip_cr3
 
-    /* 在 %rax 中保留页表地址，使用 %rcx 和 %rdx 进行比较 */
-    movq %cr3, %rcx
-    movq $0xFFFFFFFFF000, %rdx   /* 页表地址掩码（高52位） */
-    andq %rdx, %rcx              /* 清除低位标志位 */
-    andq %rdx, %rax              /* 同样处理目标页表地址 */
-
-    /* 比较是否需要切换 */
-    cmpq %rcx, %rax
-    je .L_skip_cr3_switch        /* 相同页表，无需切换 */
-
-    /* 切换 CR3 - 新线程将运行在其私有页表中 */
-    movq %rax, %cr3
-
-.L_skip_cr3_switch:
-    /* ===== 恢复线程上下文 =====
-     * 通过 %rbx 访问 next 指针——该寄存器是 callee-saved，
-     * CR3 切换后仍有效，且不涉及旧栈访问。 */
-
-    /* 恢复栈指针从 next->stack_ptr (偏移 40) */
+    /* 先切换栈指针（目标栈在恒等映射下可由旧域页表访问） */
     movq 40(%rbx), %rsp
 
-    /* 恢复调用者保存的寄存器 */
+    /* 再切换 CR3（已在目标栈上，不受旧栈映射影响） */
+    movq %cr3, %rcx
+    movq $0xFFFFFFFFF000, %rdx
+    andq %rdx, %rcx
+    andq %rdx, %rax
+    cmpq %rcx, %rax
+    je .L_skip_cr3
+    movq %rax, %cr3
+    jmp .L_restore
+
+.L_skip_cr3:
+    /* 同域切换：只需恢复栈指针 */
+    movq 40(%rbx), %rsp
+
+.L_restore:
     popq %r15
     popq %r14
     popq %r13
     popq %r12
     popq %rbp
     popq %rbx
-
     ret
 
 .size context_switch, .-context_switch

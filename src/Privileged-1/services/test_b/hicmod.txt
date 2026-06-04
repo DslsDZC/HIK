@@ -1,0 +1,8 @@
+[service]
+name = test_b
+display_name = Test Module A
+version = 1.0.0
+uuid = bbbbbbbb-2222-2222-2222-bbbbbbbbbbbb
+[build]
+static = false
+autostart = true

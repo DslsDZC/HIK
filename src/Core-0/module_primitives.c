@@ -12,6 +12,7 @@
 
 #include "include/module_primitives.h"
 #include "include/service_registry.h"
+#include "exec_flow.h"
 #include "ipc3.h"
 #include "capability.h"
 #include "domain.h"
@@ -685,7 +686,9 @@ uint64_t module_cap_create_domain(uint32_t parent_domain, uint32_t *new_domain)
 {
     (void)parent_domain;
 
-    domain_quota_t q = { .max_memory = 0x20000, .max_threads = 4,
+    /* 动态模块的 .bss 通常较大（含加载上下文等），需给足配额。
+     * 0x80000 = 512KB 覆盖代码段 + .bss + 余量。 */
+    domain_quota_t q = { .max_memory = 0x80000, .max_threads = 4,
                          .max_caps = 32, .cpu_quota_percent = 15 };
     domain_id_t did;
     hic_status_t st = domain_create(DOMAIN_TYPE_PRIVILEGED, HIC_INVALID_DOMAIN, &q, &did);
@@ -715,8 +718,8 @@ uint64_t module_cap_create_endpoint(uint32_t domain_id, uint32_t *endpoint_id)
  */
 uint64_t module_domain_start(uint32_t domain_id, uint64_t entry_point)
 {
-    thread_id_t tid;
-    hic_status_t st = thread_create((domain_id_t)domain_id, (virt_addr_t)entry_point, 3, &tid);
+    exec_flow_id_t efc;
+    hic_status_t st = exec_flow_create((domain_id_t)domain_id, (virt_addr_t)entry_point, &efc);
     if (st != 0) return (uint64_t)st;
     return (uint64_t)domain_resume((domain_id_t)domain_id);
 }

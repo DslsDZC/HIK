@@ -301,20 +301,30 @@ void irq_dispatch(u32 vector)
     }
     
     /* 快速能力验证 */
-    if (entry->endpoint_cap != CAP_HANDLE_INVALID && 
+    if (entry->endpoint_cap != CAP_HANDLE_INVALID &&
         !cap_fast_check_rights(entry->endpoint_cap, 0)) {
         return;
     }
-    
-    /* 直接跳转到服务入口点 */
-    typedef void (*handler_t)(void);
-    ((handler_t)entry->handler_address)();
-    
-    /* 发送 EOI to 8259 PIC (legacy mode) */
+
+    /*
+     * 先发 EOI，再执行 handler。
+     *
+     * 传统顺序（handler → EOI）在 handler 不切线程时没问题，
+     * 但一旦 handler（scheduler_tick）触发抢占调度，
+     * EOI 会被延迟到切换回来才执行，导致 PIC ISR 位一直置位，
+     * 阻塞同优先级的后续中断。
+     *
+     * 先发 EOI 确保 PIC 能立即响应新中断，
+     * 即使当前线程被切走也不影响。
+     */
     if (vector >= 32 && vector < 256) {
         hal_outb(0x20, 0x20);  /* EOI to PIC1 */
         if (vector >= 40) {
             hal_outb(0xA0, 0x20);  /* EOI to PIC2 (slave) */
         }
     }
+
+    /* 直接跳转到服务入口点 */
+    typedef void (*handler_t)(void);
+    ((handler_t)entry->handler_address)();
 }

@@ -39,6 +39,16 @@ typedef enum {
 } exec_flow_state_t;
 
 /*
+ * ==================== Initialization ====================
+ */
+
+/** Initialize EFC subsystem (clear thread→efc mapping) */
+void exec_flow_init(void);
+
+/** Look up EFC ID for a thread, or EXEC_FLOW_INVALID if none */
+exec_flow_id_t exec_flow_id_for_thread(thread_id_t tid);
+
+/*
  * ==================== Mechanism Primitives ====================
  */
 
