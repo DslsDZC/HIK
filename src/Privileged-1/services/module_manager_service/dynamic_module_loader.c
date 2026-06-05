@@ -851,9 +851,18 @@ hic_status_t dynamic_create_sandbox(const void *module_data, u32 module_size,
     if (is_hicmod) {
         /* HIC 模块格式 */
         log_info("检测到 HIC 模块格式");
-        
-        code_size = header->code_size;
-        data_size = header->data_size;
+
+        /* V1 vs V2: V2 的 code_size 在 arch section, V1 在头部 */
+        u32 hdr_version = *(const u32 *)((const u8 *)module_data + 4);
+        if (hdr_version >= 2) {
+            /* V2: arch section 在 arch_table_offset, code_size 在 offset 12, data_size 在 20 */
+            u32 arch_tbl = *(const u32 *)((const u8 *)module_data + 40);
+            code_size = *(const u32 *)((const u8 *)module_data + arch_tbl + 12);
+            data_size = *(const u32 *)((const u8 *)module_data + arch_tbl + 20);
+        } else {
+            code_size = header->code_size;
+            data_size = header->data_size;
+        }
         total_size = code_size + data_size;
         
         /* 对齐到页 */
@@ -867,14 +876,50 @@ hic_status_t dynamic_create_sandbox(const void *module_data, u32 module_size,
             return HIC_OUT_OF_MEMORY;
         }
         
-        /* 复制代码段（即 ELF .o 文件） */
-        const uint8_t *code_src = (const uint8_t *)module_data + sizeof(hicmod_header_t);
-        module_memcpy((void *)phys_addr, code_src, code_size);
-
-        /* 找到 service_start 在 ELF 中的文件偏移作为线程入口 */
+        /* 复制代码段 */
         {
-            uint64_t eo = elf_find_entry_point((const void *)(uintptr_t)phys_addr);
-            entry->entry_point = phys_addr + 0x40 + eo;
+            u32 hdr_version = *(const u32 *)((const u8 *)module_data + 4);
+            u32 hdr_copy_size = code_size;
+            const uint8_t *code_src;
+
+            if (hdr_version >= 2) {
+                /* V2: 代码段在 arch section 的 code_offset 处，不是紧接在头部后 */
+                u32 arch_tbl = *(const u32 *)((const u8 *)module_data + 40);
+                u32 raw_off = *(const u32 *)((const u8 *)module_data + arch_tbl + 8);
+                code_src = (const uint8_t *)module_data + raw_off;
+                /* V2 的 code_size 已在前面从 arch section 读过了 */
+            } else {
+                code_src = (const uint8_t *)module_data + sizeof(hicmod_header_t);
+                hdr_copy_size = header->code_size;
+            }
+
+            module_memcpy((void *)phys_addr, code_src, hdr_copy_size);
+        }
+
+        /* 从 HICM 头读入口点偏移（构建时 create_hicmod.py 已解析 ELF 符号） */
+        {
+            u32 entry_off = 0x40; /* 默认回退 */
+            u32 hdr_version = *(const u32 *)((const u8 *)module_data + 4);
+
+            if (hdr_version >= 2) {
+                /* V2: 读 arch_count(off36), arch_table_offset(off40) */
+                u32 arch_count   = *(const u32 *)((const u8 *)module_data + 36);
+                u32 arch_tbl_off = *(const u32 *)((const u8 *)module_data + 40);
+                #define HICM_ARCH_SECTION_SIZE 56    /* create_hicmod.py 定义 */
+                #define HICM_ARCH_OFF_ENTRY    36    /* entry_offset 在 arch section 内的偏移 */
+
+                for (u32 i = 0; i < arch_count && i < 8; i++) {
+                    u32 sec_base = arch_tbl_off + i * HICM_ARCH_SECTION_SIZE;
+                    u32 arch_id = *(const u32 *)((const u8 *)module_data + sec_base);
+                    if (arch_id == 0x01 /* HICMOD_ARCH_X86_64 */) {
+                        u32 raw = *(const u32 *)((const u8 *)module_data + sec_base + HICM_ARCH_OFF_ENTRY);
+                        /* .o 文件 entry_offset = 0 (st_value 未重定位), fallback 0x40 */
+                        entry_off = raw ? raw : 0x40;
+                        break;
+                    }
+                }
+            }
+            entry->entry_point = phys_addr + entry_off;
         }
 
         /* 创建 IPC 端点（用模块入口做 business_entry） */
@@ -1453,17 +1498,9 @@ int dynamic_module_load_all(void)
         }
     }
     
-    /* 模块参数 ABI：写 struct module_abi 到每个模块代码的固定偏移。
-     * 所有域共享的物理页也在此时分配。
-     * 布局（x86_64 ELF header 未用区域 0x20-0x3F，共 32 字节）：
-     *   +0x00: code_base     phys_addr of module code
-     *   +0x08: partner_entry IPC entry_va of partner module
-     *   +0x10: shmem_addr    shared ring buffer phys addr */
+    /* 模块间通信通过服务注册 + IPC 3.0，不在 ABI 中硬编码 partner 信息。
+     * 模块不知道其他模块的存在，只知道它可以调用的服务。 */
     {
-        uint64_t shmem_phys = 0;
-        if (module_memory_alloc(0, 4096, 0, &shmem_phys) == 0 && shmem_phys)
-            module_memset((void *)(uintptr_t)shmem_phys, 0, 4096);
-
         uint64_t prev_entry = 0;
         uint32_t prev_domain = 0;
         for (u32 i = 0; i < g_load_ctx.entry_count; i++) {
@@ -1472,12 +1509,7 @@ int dynamic_module_load_all(void)
 
             uint64_t this_entry = ipc3_get_entry_va(e->endpoint);
 
-            /* 写 struct module_abi 到 phys_addr + 0x20 */
-            volatile uint64_t *abi = (volatile uint64_t *)(uintptr_t)(e->code_base + 0x20);
-            abi[0] = e->code_base;          /* code_base */
-            abi[1] = prev_entry;            /* partner_entry (0 for first module) */
-            abi[2] = shmem_phys;            /* shmem_addr (0 if alloc failed) */
-
+            /* 链式授权：前一个域可调用当前模块的 IPC 端点 */
             if (prev_entry && this_entry)
                 ipc3_authorize(e->endpoint, prev_domain);
 

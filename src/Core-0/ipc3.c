@@ -74,7 +74,7 @@ static hic_status_t build_entry_page(ipc3_service_t *svc);
  *   0x28:  48 B8 00 F0 FF FF 00 00 00 00   mov rax, 0xFFFFF000
  *   0x32:  8B 08                             mov ecx, [rax]
  *   0x34:  0F A3 0D C5 FF FF FF             bt [rip-0x3B], ecx
- *   0x3B:  73 05                             jnc +5 (to reject at 0x42)
+ *   0x3B:  73 06                             jnc +6 (to reject at 0x43)
  *   0x3D:  FF 25 DD FF FF FF                jmp [rip-0x23] (to busaddr at 0x20)
  *   0x43:  FA                                cli
  *   0x44:  F4                                hlt
@@ -93,8 +93,8 @@ static hic_status_t build_entry_page(ipc3_service_t *svc)
         0x8B, 0x08,
         /* 0x34: bt [rip-0x3B], ecx  (RIP-relative to bitmap at 0x00, next_rip=0x3B) */
         0x0F, 0xA3, 0x0D, 0xC5, 0xFF, 0xFF, 0xFF,
-        /* 0x3B: jnc +5 (to 0x42) */
-        0x73, 0x05,
+        /* 0x3B: jnc +6 (to 0x43 — cli; hlt for unauthorized access) */
+        0x73, 0x06,
         /* 0x3D: jmp [rip-0x23] (RIP-relative to busaddr at 0x20, next_rip=0x43) */
         0xFF, 0x25, 0xDD, 0xFF, 0xFF, 0xFF,
         /* 0x43: cli; hlt; jmp -3 */

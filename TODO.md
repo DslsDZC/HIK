@@ -14,41 +14,28 @@
 
 ### 高优先级
 
-- [x] **抢占调度崩** — 已修复。
-  - 根因：
-    1. `isr_fast_stub` 未保存全部 GP 寄存器且未在 IRQ 返回前检查抢占
-    2. `context_switch` 先切 CR3 再切 RSP，导致旧栈在新域页表中不可见 → #PF
-  - 修复：
-    1. `fast_path.S`: 保存全部 15 个 GP 寄存器，`irq_dispatch` 后检查 `g_reschedule_needed` → `call schedule()`
-    2. `irq.c`: EOI 移到 handler 之前
-    3. `context.S`: 先切 RSP 再切 CR3，确保 CR3 切换时已在目标线程栈上
-    4. `scheduler_tick()` 只设标志位，上下文切换在汇编中完成
-- [x] **动态模块加载空指针** — 已修复。
-  - 根因：三层 bug：
-    1. **Stack canary** (`%fs:0x28`)：模块编译缺 `-fno-stack-protector` → 代码读 `%fs:0x28` 作为栈金丝雀 → `%fs` 基址 NULL → #PF at CR2=0x28
-    2. **SSE 非法指令**：模块编译缺 `-mno-sse` → 编译器生成 SSE 指令 → CR4.OSFXSR=0 → #UD
-    3. **`.bss` 未分配**：`create_hicmod.py` 把 `bss_size` 设 0 → init_launcher 只分配代码段不分配 .bss → #PF
-  - 修复：
-    1. `Makefile.x86_64` (P1_CFLAGS): 加 `-fno-stack-protector -mno-sse -mno-sse2 -mno-mmx -mno-3dnow`
-    2. `create_hicmod.py`: 新增 `get_elf_bss_size()`，正确设置 `bss_size`
-    3. `init_launcher/service.c`: 读取 `bss_size` 计入 `total_size`，分配后清零 .bss；修正 .bss 符号重定位基址（`bss_base_offset`）
-    4. `module_primitives.c`: 域配额从 128KB 增至 512KB
-    5. `dynamic_module_loader.c`: 4MB `g_module_buffer` 从静态数组改为 `module_memory_alloc` 按需分配
-- [x] **EFC 集成** — 执行流能力化：`exec_flow_dispatch()` 成为 `schedule()` 的唯一切换路径，线程创建走 `exec_flow_create()` → 能力验证 → `context_switch`
-- [x] **IPC 3.0 Plan B** — #PF 门控全路径可用：`ipc3_register_service` + `build_entry_page` + `ipc3_authorize` + `ipc3_handle_pf` + `ipc3_return`
-- [x] **动态模块加载端到端验证通过** — cli_service 成功作为动态模块加载
-  - `create_efi_disk_no_root.py`: 自动生成 `MODULES.LIS`，模块用 8.3 短名存储
-  - `init_launcher`: 增加 `MODULE_M.HIC` 短名 fallback
-  - `Makefile.x86_64`: `cli_service` 加入 `P1_NEEDED_MODULES`
-  - 验证：系统稳定，两个动态模块（CLI_SERV, MODULE_M）成功加载
+- [x] **抢占调度崩** — 已修复（RSP→CR3 顺序 + fast_path.S 保存所有寄存器 + g_reschedule_needed 检查）
+- [x] **动态模块加载空指针** — 已修复（三层 bug：stack canary + SSE + .bss 未分配）
+- [x] **EFC 集成** — 完成
+- [x] **IPC 3.0 Plan B** — 完成
+- [x] **动态模块加载端到端验证** — 完成
+- [x] **跨域 context_switch #GP** — 已修复（IPC3 entry page jnc bug + Core-0 PT 范围扩展）
+- [ ] **抢占调度 sti 导致 #GP** — `context.S` 的 `.L_restore` 加 `sti` 后，第一个 context_switch(NULL, first_thread) 
+      从主循环切换时，挂起时钟中断在 `ret` 后立即触发，此时新域页表已加载但新线程首指令未执行。
+      中断处理内嵌调用 `schedule()` 导致执行流混乱。
+      涉及: `fast_path.S`, `context.S`, `exec_flow_dispatch`
 - [ ] **`memory_service`、`device_manager`、`security_monitor` 崩溃** — `platform.yaml` 中已注释，标注"启动时崩溃（需修复）"
   - 影响：无内存管理服务、设备管理服务、安全监控，系统功能不完整
-- [ ] **跨域 context_switch #GP** — `module_thread_yield` → `schedule` → `context_switch` 切换到另一域线程时 #GP/Triple Fault
-  - 现状：RSP→CR3 顺序已修，入口点 `phys_addr + 0x40` 已修，模块正确启动
-  - 崩溃点：`module_thread_yield` 内 `schedule()` 调用 `context_switch` 跨域切换时
-  - 推测：新域页表未映射目标线程栈（栈在 PMM 分配，`_kernel_end` 之前的地址可能未映射）
-  - 涉及：`domain.c`, `context.S`, `pagetable.c`
-  - 影响：`module_thread_yield` 不能切到其他域线程，所有跨域切换需走 IPC 3.0
+- [ ] **模块加载链式授权** — `dynamic_module_loader.c:1501-1529` 的 `ipc3_authorize` 是链式的
+      （模块A授权模块B），需要验证这种模式是否符合设计意图
+
+### 中优先级（本轮引入）
+
+- [ ] **`fast_path.S` 混用缩进** — 101-105 行用 tab，其余用 space（sed 替换导致）
+- [ ] **清理未使用的 ELF 解析函数** — `elf_find_symbols`, `elf_get_section_name`, 
+      `elf_find_lifecycle_functions`, `parse_int`, `find_entry` 仍在代码中（编译警告）
+- [ ] **`create_hicmod.py` `.o` entry_offset 的 shndx 边界检查** — `st_shndx < len(sections)` 
+      未考虑 `SHN_ABS`(0xFFF1) 和 `SHN_COMMON`(0xFFF2) 的情况
 
 ### 已完成架构移植
 
@@ -72,7 +59,26 @@
   - 构建: `make ARCH=stm32f103`
   - 仿真: `make ARCH=stm32f103 qemu` (qemu-system-arm -M stm32-h103)
 
-### 中优先级
+### 可维护性
+
+- [ ] **V1/V2 HICM 头文件冲突** — `module_types.h` 和 `module_format.h` 都定义了 
+      `hicmod_header_t`，字段偏移完全不同。模块管理器默认用 V1 struct 读 V2 模块。
+      任何一边改 layout 都会静默数据错乱。
+      - 涉及: `src/Privileged-1/include/module_types.h`, `src/Privileged-1/include/module_format.h`
+      - `dynamic_module_loader.c` 现在用原始字节偏移绕过的，没有类型安全
+- [ ] **ELF 结构体定义散落三处** — Python (create_hicmod.py)、C 模块管理器、
+      C 内核 (module_loader.h)，同一套 ELF 解析有三个拷贝
+- [ ] **线程创建两条路径未统一** — `thread_create_bound`(静态模块) vs `thread_create`(动态模块)，
+      参数和错误处理不同，行为区别靠读函数体才能发现
+- [ ] **模块加载四层嵌套** — linker(.static_modules) → static_module.c → init_launcher → 
+      module_manager。每层都实现了创建域+映射内存+启动线程的子集，修 bug 要追四层
+- [ ] **注释声明和代码不同步** — `exec_flow.c:155` 说"context_switch 在 .L_restore 中已 sti"，
+      但实际上 context.S 没有 sti。`fast_path.S` 注释说"协作调度"但代码已加了抢占检查
+- [ ] **V2 架构段用原始字节偏移访问** — `dynamic_module_loader.c` 无法用 struct 字段名，
+      全部硬编码 offset（`+12`=code_size, `+36`=entry_offset），布局依赖 `create_hicmod.py` 
+      和 `module_format.h` 同时更新，易碎
+
+### 大文件拆分
 
 - [ ] **`formal_verification.c` ~1410 行** — 字符串格式化工具代码与验证逻辑混在一起
 - [ ] **`bootloader/main.c` ~1557 行** — UEFI 启动 + 内核加载 + 验签 + YAML 解析混在一起

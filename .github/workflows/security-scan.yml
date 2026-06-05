@@ -1,0 +1,82 @@
+name: security-scan
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 6 * * 1'
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clamav cppcheck
+
+      - name: Update ClamAV database
+        run: |
+          sudo freshclam 2>&1 || echo "DB update skipped (non-fatal)"
+
+      - name: ClamAV — virus / trojan scan
+        run: |
+          clamscan --recursive --infected \
+            --exclude-dir=.git \
+            --exclude-dir=build \
+            --exclude-dir=scripts/venv \
+            . && echo "OK: clean" || {
+              echo "FAIL: malware detected"
+              exit 1
+            }
+
+      - name: CPPCheck — static analysis
+        run: |
+          cppcheck --enable=all --suppress=missingIncludeSystem \
+            --std=c11 --quiet \
+            src/Core-0/ 2>&1 || true
+
+      - name: Check for unexpected binary blobs
+        run: |
+          FOUND=$(find src/ -type f -exec file {} \; | \
+            grep -v "ASCII\|UTF-8\|C source\|assembler\|empty\|symbolic link" | \
+            grep -v "ELF.*relocatable\|ar archive" || true)
+          if [ -n "$FOUND" ]; then
+            echo "WARNING: unexpected binaries:"
+            echo "$FOUND"
+            exit 1
+          fi
+          echo "OK: no binary blobs"
+
+      - name: Check for suspicious encoded strings
+        run: |
+          FOUND=$(grep -rn --include="*.c" --include="*.h" \
+            -E '[A-Za-z0-9+/]{40,}={0,2}' src/Core-0/ | \
+            grep -v "UUID\|uuid\|SHA256_DIGEST_LENGTH" | \
+            grep -v "//\|^\s*\*" | head -20 || true)
+          if [ -n "$FOUND" ]; then
+            echo "WARNING: possible encoded payloads:"
+            echo "$FOUND"
+            exit 1
+          fi
+          echo "OK: no suspicious strings"
+
+      - name: Verify all source files have SPDX headers
+        run: |
+          MISSING=0
+          for f in $(find src/Core-0 -name "*.c" -o -name "*.h" -o -name "*.S"); do
+            if ! head -10 "$f" | grep -q "SPDX-FileCopyrightText"; then
+              echo "NO SPDX: $f"
+              MISSING=$((MISSING + 1))
+            fi
+          done
+          if [ "$MISSING" -gt 0 ]; then
+            echo "FAIL: $MISSING files without SPDX header"
+            exit 1
+          fi
+          echo "OK: all files have SPDX headers"

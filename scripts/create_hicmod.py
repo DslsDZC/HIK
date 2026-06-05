@@ -277,9 +277,11 @@ def find_elf_entry_offset(obj_data):
             if st_type != STT_FUNC:
                 continue
             
-            if st_value == 0:
+            st_shndx = struct.unpack_from('<H', sym_data, sym_offset + 6)[0]
+            # .o 文件中 st_value=0 是合法的（节内首函数），只跳过未定义符号
+            if st_shndx == 0:  # SHN_UNDEF
                 continue
-            
+
             # 获取符号名
             name_end = str_data.find(b'\x00', st_name)
             if name_end == -1:
@@ -287,6 +289,9 @@ def find_elf_entry_offset(obj_data):
             sym_name = str_data[st_name:name_end].decode('utf-8', errors='ignore')
             
             if sym_name == name or sym_name.endswith('_' + name):
+                # 对于 .o 文件，st_value 是节内偏移，需加节文件偏移
+                if 0 < st_shndx < len(sections):
+                    return st_value + sections[st_shndx]['offset']
                 return st_value
     
     return 0

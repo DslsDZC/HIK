@@ -1,0 +1,13 @@
+name: HIC CodeQL 配置
+
+queries:
+  - uses: security-and-quality
+
+paths-ignore:
+  - build/
+  - scripts/
+  - docs/
+  - tests/
+  - formal/
+  - src/bootloader/
+  - src/Privileged-1/services/*/hicmod.txt

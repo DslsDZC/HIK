@@ -1,0 +1,17 @@
+# Core-0 kernel (TCB)
+/src/Core-0/             @DslsDZC
+
+# Bootloader
+/src/bootloader/         @DslsDZC
+
+# Build system
+/Makefile                @DslsDZC
+/Makefile.*              @DslsDZC
+/build_config.yaml       @DslsDZC
+/platform.yaml           @DslsDZC
+/scripts/                @DslsDZC
+
+# Security
+/SECURITY.md             @DslsDZC
+
+# Everything else defaults to repo owner

@@ -240,10 +240,16 @@ hic_status_t domain_create(domain_type_t type, domain_id_t parent,
 
         pagetable_setup_domain(HIC_DOMAIN_CORE, domain_pagetable);
         /* Identity-map the full physical memory range for Core-0 access */
-        /* PMM manages up to 32MB (0x2000000), map it all */
+        /* Use usable_max_frame to cover all PMM-managed memory */
+        extern u64 usable_max_frame;
+        phys_addr_t core_map_size = (phys_addr_t)(usable_max_frame * PAGE_SIZE);
+        if (core_map_size == 0) core_map_size = 0x2000000; /* fallback if PMM not ready */
+        console_puts("[Domain] Core-0 identity-mapping 0x0 - 0x");
+        console_puthex64(core_map_size);
+        console_puts("\n");
         pagetable_map(domain_pagetable,
             (virt_addr_t)0x00000000, 0x00000000,
-            0x2000000, PERM_RW, MAP_TYPE_KERNEL);
+            (size_t)core_map_size, PERM_RW, MAP_TYPE_KERNEL);
         pagetable_switch(domain_pagetable);
     } else {
         page_table_t *domain_pagetable = pagetable_create();

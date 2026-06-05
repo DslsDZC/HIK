@@ -98,8 +98,12 @@ isr_fast_stub:
     /* 调用中断分发函数（内部已发 EOI） */
     call irq_dispatch
 
-    /* 清除抢占标志（协作调度 — 线程通过 yield 主动切换） */
-    movl $0, g_reschedule_needed(%rip)
+	cmpl $0, g_reschedule_needed(%rip)
+	je .L_skip_resched
+	movl $0, g_reschedule_needed(%rip)
+	call schedule
+.L_skip_resched:
+
 
 .L_fast_restore:
     /* 恢复全部 15 个通用寄存器 */
