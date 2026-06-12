@@ -103,7 +103,7 @@ thread_id_t thread_find_by_logical_core(u32 logical_core_id);
 hic_status_t thread_terminate(thread_id_t thread_id);
 
 /* 让出CPU */
-void thread_yield(void);
+// removed
 
 /* 阻塞/唤醒 */
 hic_status_t thread_block(thread_id_t thread_id);
@@ -117,7 +117,7 @@ extern thread_t g_threads[MAX_THREADS];
 
 /* 调度器接口（由core实现） */
 void scheduler_init(void);
-thread_t *schedule(void);
+// removed
 void scheduler_tick(void);
 thread_id_t scheduler_pick_next(void);
 void context_switch_to(thread_id_t next_thread);

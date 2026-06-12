@@ -60,12 +60,12 @@ void timer_update(void)
     timer_ticks++;
     
     /* 触发调度器tick */
-    extern void scheduler_tick(void);
-    scheduler_tick();
+    // scheduler_tick removed
+    // tick
     
     /* 检查是否有超时的线程需要唤醒 */
-    extern void thread_check_timeouts(void);
-    thread_check_timeouts();
+    // removed
+    // removed
     
     /* 更新性能统计 */
     extern void perf_measure_timer(u64);

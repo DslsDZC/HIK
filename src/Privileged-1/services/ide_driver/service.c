@@ -79,7 +79,7 @@ static uint8_t g_sector_buffer[512];
 
 /* 外部函数 - 来自内核的原语 */
 extern void serial_print(const char *msg);
-extern void thread_yield(void);
+// removed
 
 /* I/O 端口访问 - 通过内核 HAL */
 extern uint8_t hal_inb(uint16_t port);
@@ -279,7 +279,7 @@ hic_status_t ide_driver_start(void) {
     
     /* 主服务循环 */
     while (1) {
-        thread_yield();
+        // removed
     }
     
     return HIC_SUCCESS;

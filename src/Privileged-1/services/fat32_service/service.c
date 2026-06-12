@@ -205,7 +205,7 @@ hic_status_t fat32_service_init(void) {
 hic_status_t fat32_service_start(void) {
     /* 输出启动信息 */
     extern void serial_print(const char *msg);
-    extern void thread_yield(void);
+    // removed
     
     serial_print("[FAT32] Service started\n");
     
@@ -226,7 +226,7 @@ hic_status_t fat32_service_start(void) {
     int count = 0;
     while (1) {
         /* 让出 CPU 给其他线程 */
-        thread_yield();
+        // removed
         count++;
         
         /* 避免无限循环太快 */

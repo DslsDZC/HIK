@@ -277,8 +277,6 @@ void kernel_main(void)
     
     /* ==================== 第八阶段：主循环 ==================== */
     
-    console_puts("[BOOT] Starting main loop, calling schedule()...\n");
-
     console_puts("\n[HIC] Kernel boot complete - Serial Console\n");
 
     char cmdline[128];
@@ -305,8 +303,7 @@ void kernel_main(void)
             }
         }
 
-        /* 调度服务线程 */
-        (void)schedule();
+        /* 逻辑核心调度由 Privileged-1 层管理，Core-0 仅提供 context_switch 机制 */
 
         /* 定时器与维护 */
         timer_update();

@@ -28,11 +28,10 @@
 /* 外部变量 */
 extern boot_state_t g_boot_state;
 
-extern void scheduler_tick(void);
 
 volatile irq_route_entry_t irq_table[256] = {
-    [30] = { .handler_address = (u64)scheduler_tick, .initialized = 1 },
-    [32] = { .handler_address = (u64)scheduler_tick, .initialized = 1 },
+    [30] = { .handler_address = 0, .initialized = 0 },
+    [32] = { .handler_address = 0, .initialized = 0 },
 };
 
 /* 动态池分配位图 */

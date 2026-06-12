@@ -293,7 +293,7 @@ context_switch_fast:
     movq %rax, 8(%rdi)
 
     /* 调用调度器选择下一个线程 */
-    call schedule
+    // call schedule — removed
     /* 注意：schedule 返回后，%rsi 应该指向新的线程上下文 */
 
     /* 恢复next线程上下文 */

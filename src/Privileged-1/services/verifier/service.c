@@ -615,7 +615,7 @@ int verifier_start(void)
 {
     /* 输出启动信息 */
     extern void serial_print(const char *msg);
-    extern void thread_yield(void);
+    extern void module_thread_yield(void);
     
     serial_print("[VERIFIER] Service started\n");
     
@@ -624,7 +624,7 @@ int verifier_start(void)
     int count = 0;
     while (1) {
         /* 让出 CPU 给其他线程 */
-        thread_yield();
+        module_thread_yield();
         count++;
         
         /* 避免无限循环太快 */

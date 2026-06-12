@@ -1435,8 +1435,8 @@ hic_status_t domain_graceful_shutdown(domain_id_t domain,
         check_count++;
         if ((check_count % 10) == 0) {
             /* 让其他线程有机会执行（可能正在释放资源） */
-            extern void thread_yield(void);
-            thread_yield();
+            // removed
+            // removed
         } else {
             /* 短暂延迟避免忙等待 */
             hal_udelay(100);  /* 100us */

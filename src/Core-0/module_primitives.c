@@ -724,11 +724,11 @@ uint64_t module_domain_start(uint32_t domain_id, uint64_t entry_point)
     return (uint64_t)domain_resume((domain_id_t)domain_id);
 }
 
-/** @brief 线程让出 CPU */
+/** @brief 线程让出 CPU — 状态迁移为 READY，等待 P1 调度器 dispatch */
 void module_thread_yield(void)
 {
-    extern void thread_yield(void);
-    thread_yield();
+    extern void exec_flow_yield(void);
+    exec_flow_yield();
 }
 
 /**

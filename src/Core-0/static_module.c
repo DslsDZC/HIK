@@ -54,6 +54,7 @@
 #include "include/static_module.h"
 #include "include/service_registry.h"
 #include "ipc3.h"
+#include "exec_flow.h"
 #include "domain.h"
 #include "capability.h"
 #include "pmm.h"
@@ -638,27 +639,23 @@ int static_module_start_ex(static_module_desc_t *module, u32 runtime_idx)
     console_puthex64(entry_point);
     console_puts("\n");
 
-    /* 
-     * 使用 thread_create_bound 创建绑定到逻辑核心的线程
-     * 这确保模块在自己的执行上下文中运行，并绑定到特定的逻辑核心
+    /*
+     * 通过 EFC 创建线程——执行流能力，供 P1 调度器 dispatch。
+     * thread_create_bound 的内部实现（栈分配 + 上下文初始化 + 绑定逻辑核心）
+     * 由 exec_flow_create → thread_create 完成。
      */
-    thread_id_t module_thread;
-    hic_status_t status = thread_create_bound(domain, logical_core_id,
-                                              (virt_addr_t)entry_point,
-                                              HIC_PRIORITY_NORMAL, &module_thread);
-    
+    exec_flow_id_t efc = EXEC_FLOW_INVALID;
+    hic_status_t status = exec_flow_create(domain, (virt_addr_t)entry_point, &efc);
+
     if (status != HIC_SUCCESS) {
-        console_puts("[STATIC_MODULE]     ERROR: Failed to create bound module thread (status=");
+        console_puts("[STATIC_MODULE]     ERROR: Failed to create execution flow (status=");
         console_putu64(status);
         console_puts(")\n");
         return -1;
     }
-    
-    console_puts("[STATIC_MODULE]     Module thread created: ");
-    console_putu64(module_thread);
-    console_puts(" (bound to core ");
-    console_putu64(logical_core_id);
-    console_puts(")\n");
+
+    console_puts("[STATIC_MODULE]     Execution flow created: EFC ");
+    console_putu64(efc);
     
     /* 标记模块为运行状态 */
     g_module_runtime[runtime_idx].running = true;

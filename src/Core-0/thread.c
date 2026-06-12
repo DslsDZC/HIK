@@ -56,25 +56,11 @@ __attribute__((naked)) static void thread_entry_wrapper(void)
 /* 线程退出处理函数 - 当线程入口函数返回时调用 */
 static void thread_exit_handler(void)
 {
-    /* 使用串口输出调试信息 */
-    console_puts("[THREAD_EXIT] Thread completed, calling schedule()\n");
-
-    /* 保存g_current_thread指针，因为schedule()会修改它 */
-    thread_t *exiting_thread = g_current_thread;
-
-    /* 线程完成，标记为终止状态 */
-    if (exiting_thread != NULL && exiting_thread != &idle_thread) {
-        exiting_thread->state = THREAD_STATE_TERMINATED;
+    console_puts("[THREAD_EXIT] Thread completed\n");
+    if (g_current_thread != NULL && g_current_thread != &idle_thread) {
+        g_current_thread->state = THREAD_STATE_TERMINATED;
     }
-
-    /* 让出CPU，调度下一个线程 */
-    schedule();
-
-    /* 不应该到达这里 */
-    console_puts("[THREAD_EXIT] ERROR: Returned from schedule()!\n");
-    while (1) {
-        halt_cpu();
-    }
+    while (1) halt_cpu();
 }
 
 /* 线程系统初始化 */
@@ -622,4 +608,12 @@ thread_id_t thread_find_by_logical_core(u32 logical_core_id)
         }
     }
     return INVALID_THREAD;
+}
+hic_status_t thread_ready(thread_id_t thread_id)
+{
+    if (thread_id >= MAX_THREADS) return HIC_ERROR_INVALID_PARAM;
+    thread_t *thread = &g_threads[thread_id];
+    if (thread == NULL) return HIC_ERROR_INVALID_PARAM;
+    thread->state = THREAD_STATE_READY;
+    return HIC_SUCCESS;
 }
