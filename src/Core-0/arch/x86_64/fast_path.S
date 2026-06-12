@@ -98,10 +98,11 @@ isr_fast_stub:
     /* 调用中断分发函数（内部已发 EOI） */
     call irq_dispatch
 
-	cmpl $0, g_reschedule_needed(%rip)
-	je .L_skip_resched
-	movl $0, g_reschedule_needed(%rip)
-	call schedule
+	/*
+	 * 只设标志，由安全点（yield、schedule 入口、P1 调度器）检查后调 schedule()。
+	 * ISR 不直接切线程——逻辑核心的调度决策权在持有者（Privileged-1），不在 Core-0。
+	 * 多核下 per-CPU timer 各自设标志，互不干扰。
+	 */
 .L_skip_resched:
 
 

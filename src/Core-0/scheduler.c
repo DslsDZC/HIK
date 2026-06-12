@@ -59,10 +59,13 @@ static u32 g_last_scheduled = 0;
 
 static thread_t *boot_pick_next(void)
 {
+    u32 skip = g_current_thread ? g_current_thread->thread_id : MAX_THREADS;
+
     for (u32 offset = 1; offset <= MAX_THREADS; offset++) {
         u32 i = (g_last_scheduled + offset) % MAX_THREADS;
         thread_t *t = &g_threads[i];
-        if (t->thread_id == i && t->state == THREAD_STATE_READY && t->stack_ptr != 0) {
+        if (t->thread_id == i && t->state == THREAD_STATE_READY && t->stack_ptr != 0
+            && i != skip) {
             g_last_scheduled = i;
             return t;
         }
