@@ -54,13 +54,15 @@ __attribute__((naked)) static void thread_entry_wrapper(void)
 #endif
 
 /* 线程退出处理函数 - 当线程入口函数返回时调用 */
-static void thread_exit_handler(void)
+static void __attribute__((noreturn)) thread_exit_handler(void)
 {
-    console_puts("[THREAD_EXIT] Thread completed\n");
-    if (g_current_thread != NULL && g_current_thread != &idle_thread) {
-        g_current_thread->state = THREAD_STATE_TERMINATED;
+    /* 先输出原始串口标记 */
+    __asm__ volatile("mov $'!', %%al; out %%al, $0x3F8" ::: "eax");
+
+    /* TODO: state cleanup after thread context issues resolved */
+    while (1) {
+        __asm__ volatile("cli; hlt");
     }
-    while (1) halt_cpu();
 }
 
 /* 线程系统初始化 */
@@ -192,15 +194,20 @@ virt_addr_t arch_thread_setup_stack(virt_addr_t stack_top,
 {
     u64 *sp = (u64 *)(uintptr_t)stack_top;
 
-    /* ISR-frame-compatible initial stack:
-     * ISR 抢占的线程栈从低到高：15reg | vector | IRQ帧(RIP,CS,RFL)
-     * 初始栈模拟 ISR 帧，使 ISR 的 .L_fast_restore + iretq 可直接执行。 */
-    sp--; *sp = (u64)thread_exit_handler;  /* 入口函数 ret 到这里 */
-    sp--; *sp = 0x0202;                    /* IRQ帧: RFLAGS (IF=1) */
-    sp--; *sp = 0x0008;                    /* IRQ帧: CS (kernel CS) */
-    sp--; *sp = (u64)entry_point;          /* IRQ帧: RIP */
-    sp--; *sp = 0;                         /* IRQ 向量号 */
-    sp -= 15;                              /* 15 个 GP 寄存器槽位 */
+    /* 初始栈：使用线程入口包装器管理函数返回。
+     * 布局（从高到低）：
+     *   [entry_point]          <- wrapper 的 popq %rax 弹出
+     *   [RFLAGS(IF=0)]         <- iretq 弹出
+     *   [CS(0x0008)]           <- iretq 弹出
+     *   [thread_entry_wrapper] <- iretq RIP → wrapper 运行
+     *   [vector=0]
+     *   [15×GP reg] */
+    sp--; *sp = (u64)entry_point;              /* wrapper popq 得到入口点 */
+    sp--; *sp = 0x0002;                        /* RFLAGS (IF=0) */
+    sp--; *sp = 0x0008;                        /* CS */
+    sp--; *sp = (u64)thread_entry_wrapper;      /* iretq RIP → wrapper */
+    sp--; *sp = 0;                             /* IRQ 向量号 */
+    sp -= 15;                                  /* 15 GP 寄存器槽位 */
     return (virt_addr_t)(uintptr_t)sp;
 }
 
@@ -465,15 +472,14 @@ hic_status_t thread_create(domain_id_t domain_id, virt_addr_t entry_point,
     thread->time_slice = 100;  /* 默认时间片 */
     thread->wait_flags = 0;
     
-    /* 初始化栈：ISR 帧兼容布局
-     * 从高到低：thread_exit_handler | RFLAGS(IF=1) | CS(0x08) | RIP(entry) | vector | 15regs */
+    /* 初始化栈：使用 thread_entry_wrapper 管理函数返回 */
     u64 *stack_top = (u64 *)(stack_phys + 4 * PAGE_SIZE);
-    stack_top--; *stack_top = (u64)thread_exit_handler;
-    stack_top--; *stack_top = 0x0202;                    /* RFLAGS */
-    stack_top--; *stack_top = 0x0008;                    /* CS */
-    stack_top--; *stack_top = (u64)entry_point;          /* RIP */
-    stack_top--; *stack_top = 0;                         /* IRQ向量号 */
-    stack_top -= 15;                                     /* 15 GP 寄存器槽位 */
+    stack_top--; *stack_top = (u64)entry_point;              /* wrapper popq */
+    stack_top--; *stack_top = 0x0002;                        /* RFLAGS (IF=0) */
+    stack_top--; *stack_top = 0x0008;                        /* CS */
+    stack_top--; *stack_top = (u64)thread_entry_wrapper;      /* iretq RIP → wrapper */
+    stack_top--; *stack_top = 0;                             /* IRQ向量号 */
+    stack_top -= 15;                                         /* 15 GP 寄存器槽位 */
     thread->stack_ptr = (virt_addr_t)stack_top;
 
     atomic_exit_critical(irq);

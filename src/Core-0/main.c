@@ -139,7 +139,7 @@ void kernel_main(void)
     scheduler_init();
     console_puts("[BOOT] Scheduler initialization completed\n");
 
-    /* 【步骤4.2：定时器初始化（Core-0 调度机制）】 */
+    /* 【步骤4.2：定时器初始化（Core-0 调度机制）- 关闭以调试 #GP】 */
     extern void timer_init(void) __attribute__((weak));
     if (timer_init) {
         timer_init();
@@ -307,6 +307,7 @@ void kernel_main(void)
          * 每个线程通过 exec_flow_dispatch 首次运行（context_switch 6reg），
          * 后续 timer ISR 将透明切换已运行的线程（15reg + IRQ 帧）。 */
         if (g_current_thread == NULL) {
+            { __asm__ volatile("mov $'D', %%al; out %%al, $0x3F8" ::: "eax"); }
             extern void hic_boot_dispatch_all(void);
             hic_boot_dispatch_all();
         }

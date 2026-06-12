@@ -183,27 +183,8 @@ context_switch:
     /* 将 next 指针保存在 callee-saved 寄存器 %rbx 中 */
     movq %rsi, %rbx
 
-    /* 获取 next 线程的 domain_id */
-    movl 4(%rbx), %edi
-    cmpq $256, %rdi
-    jae .L_skip_cr3
-
-    call domain_switch_get_pagetable
-    testq %rax, %rax
-    jz .L_skip_cr3
-
-    /* 先切换栈指针（目标栈在恒等映射下可由旧域页表访问） */
-    movq 40(%rbx), %rsp
-
-    /* 再切换 CR3（已在目标栈上，不受旧栈映射影响） */
-    movq %cr3, %rcx
-    movq $0xFFFFFFFFF000, %rdx
-    andq %rdx, %rcx
-    andq %rdx, %rax
-    cmpq %rcx, %rax
-    je .L_skip_cr3
-    movq %rax, %cr3
-    jmp .L_restore
+    /* TODO: 跳过 CR3 切换直到域页表完整 */
+    jmp .L_skip_cr3
 
 .L_skip_cr3:
     /* 同域切换：只需恢复栈指针 */
