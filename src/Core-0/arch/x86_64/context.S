@@ -71,7 +71,6 @@ x86_64_save_context:
     popq %rdx
     movq %rdx, 128(%rdi)   /* RFLAGS */
 
-    sti
     ret
 
 .size x86_64_save_context, .-x86_64_save_context
@@ -227,7 +226,6 @@ context_switch:
     popq %rbx
     popq %rax
     addq $8, %rsp       /* 跳过 IRQ 向量号 */
-    sti
     iretq
 
 .size context_switch, .-context_switch
@@ -296,7 +294,6 @@ x86_64_context_init:
     /* 设置默认 RFLAGS (offset 128) - 启用中断 */
     movq $0x202, 128(%rdi)     /* IF=1, 保留位=1 */
 
-    sti
     ret
 
 .size x86_64_context_init, .-x86_64_context_init
