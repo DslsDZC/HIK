@@ -53,3 +53,19 @@ void scheduler_init(void)
 
     console_puts("[SCHED] Minimal scheduler initialized\n");
 }
+
+#include "exec_flow.h"
+
+/* Boot: dispatch all ready EFCs sequentially */
+void hic_boot_dispatch_all(void)
+{
+    for (u32 i = 0; i < MAX_THREADS; i++) {
+        thread_t *t = &g_threads[i];
+        if (t->thread_id != i || t->state != THREAD_STATE_READY || t->stack_ptr == 0)
+            continue;
+        exec_flow_id_t efc = exec_flow_id_for_thread(i);
+        if (efc == EXEC_FLOW_INVALID)
+            continue;
+        exec_flow_dispatch(efc, 0);
+    }
+}

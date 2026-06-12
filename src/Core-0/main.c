@@ -303,7 +303,13 @@ void kernel_main(void)
             }
         }
 
-        /* 逻辑核心调度由 Privileged-1 层管理，Core-0 仅提供 context_switch 机制 */
+        /* 首次 dispatch：依次启动所有就绪的 EFC 线程。
+         * 每个线程通过 exec_flow_dispatch 首次运行（context_switch 6reg），
+         * 后续 timer ISR 将透明切换已运行的线程（15reg + IRQ 帧）。 */
+        if (g_current_thread == NULL) {
+            extern void hic_boot_dispatch_all(void);
+            hic_boot_dispatch_all();
+        }
 
         /* 定时器与维护 */
         timer_update();
