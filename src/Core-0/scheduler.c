@@ -62,7 +62,7 @@ static thread_t *boot_pick_next(void)
     for (u32 offset = 1; offset <= MAX_THREADS; offset++) {
         u32 i = (g_last_scheduled + offset) % MAX_THREADS;
         thread_t *t = &g_threads[i];
-        if (t->thread_id == i && t->state == THREAD_STATE_READY) {
+        if (t->thread_id == i && t->state == THREAD_STATE_READY && t->stack_ptr != 0) {
             g_last_scheduled = i;
             return t;
         }

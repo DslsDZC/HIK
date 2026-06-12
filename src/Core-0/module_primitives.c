@@ -748,3 +748,14 @@ void module_memset(void *dest, int value, size_t size)
 {
     memset(dest, value, size);
 }
+
+/**
+ * module_get_service_entry — 按名称查找服务入口页虚拟地址
+ * 通过 IPC3 名称表查找，非 Core-0 服务注册表。
+ * 返回 entry_page_va，调用方可用 `call [rax]` 方式发起 IPC。
+ * 返回 0 表示服务未找到。
+ */
+uint64_t module_get_service_entry(const char *name)
+{
+    return (uint64_t)ipc3_find_service(name);
+}

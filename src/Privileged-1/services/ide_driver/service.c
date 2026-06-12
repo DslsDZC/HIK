@@ -32,7 +32,13 @@ int _ide_driver_entry(void)
     
     /* 服务不应返回，如果返回则进入无限循环 */
     while (1) {
+#if defined(__x86_64__) || defined(__i386__)
         __asm__ volatile("hlt");
+#elif defined(__aarch64__)
+        __asm__ volatile("wfi");
+#else
+        __asm__ volatile("" ::: "memory");
+#endif
     }
     
     return 0;

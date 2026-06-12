@@ -238,6 +238,12 @@ void kernel_main(void)
         console_puts("[BOOT] No embedded modules found\n");
     }
     
+    /* 【步骤10.5：加载 MMIO 配置（从 platform.yaml static_modules[].mmio_regions）】 */
+    console_puts("\n[BOOT] STEP 10.5: Loading MMIO configuration\n");
+    extern void mmio_load_config_from_yaml(void);
+    mmio_load_config_from_yaml();
+    console_puts("[BOOT] MMIO configuration loaded\n");
+
     /* 【步骤11：加载静态模块】 */
     console_puts("\n[BOOT] STEP 11: Loading Static Modules\n");
     console_puts("[BOOT] Loading static modules from configuration...\n");

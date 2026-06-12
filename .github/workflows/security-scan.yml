@@ -22,11 +22,20 @@ jobs:
 
       - name: Update ClamAV database
         run: |
-          sudo freshclam 2>&1 || echo "DB update skipped (non-fatal)"
+          sudo systemctl stop clamav-freshclam 2>/dev/null || true
+          sudo freshclam --stdout --no-dns 2>&1 || {
+            echo "freshclam failed, downloading databases directly..."
+            sudo mkdir -p /var/lib/clamav
+            cd /var/lib/clamav
+            sudo wget -q http://database.clamav.net/main.cvd
+            sudo wget -q http://database.clamav.net/daily.cvd
+            echo "DB download complete:"
+            ls -la /var/lib/clamav/
+          }
 
       - name: ClamAV — virus / trojan scan
         run: |
-          clamscan --recursive --infected \
+          sudo clamscan --recursive --infected \
             --exclude-dir=.git \
             --exclude-dir=build \
             --exclude-dir=scripts/venv \

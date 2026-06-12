@@ -63,11 +63,19 @@ typedef struct {
 #define GDT_ACCESS_ACCESSED   (1 << 0)
 #define GDT_ACCESS_TSS        (0x9)  /* TSS类型：可用64位TSS */
 
-/* 粒度定义 */
+/* 粒度定义
+ * 参考 Intel SDM Vol.3-A, 3.4.5 "Segment Descriptors"
+ * 字节 6 (granularity):
+ *   bit 7: G — 1=4K 粒度, 0=字节粒度
+ *   bit 6: D/B — 1=32-bit 默认操作大小 / 扩展栈段上界
+ *   bit 5: L  — 1=64位代码段 (IA-32e 模式); D 必须为 0
+ *   bit 4: AVL — 系统软件可用
+ *   bits 3-0: limit[19:16]
+ */
 #define GDT_GRANULARITY_4K    (1 << 7)
 #define GDT_GRANULARITY_BYTE  (0 << 7)
-#define GDT_SIZE_32BIT        (0 << 6)
-#define GDT_SIZE_64BIT        (1 << 6)
+#define GDT_SIZE_32BIT        (1 << 6)   /* D=1: 32-bit 默认操作大小 */
+#define GDT_SIZE_64BIT        (1 << 5)   /* L=1: 64位代码段 (D 必须为 0) */
 
 /* GDT选择子（索引） */
 #define GDT_NULL      0

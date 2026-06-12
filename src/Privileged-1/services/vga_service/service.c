@@ -14,10 +14,19 @@
 #include "service.h"
 #include <string.h>
 
-/* 串口输出函数 - 直接操作串口端口 COM1 (0x3F8) */
+/* 串口输出函数 */
 static inline void serial_putchar(char c) {
+#if defined(__x86_64__)
     uint16_t port = 0x3F8;
     __asm__ volatile("outb %0, %w1" : : "a"(c), "Nd"(port));
+#elif defined(__aarch64__)
+    /* ARM64 QEMU virt PL011 UART at 0x09000000 */
+    volatile uint8_t *uart = (volatile uint8_t *)0x09000000;
+    while (*(uart + 5) & 0x20); /* 等待 TX FIFO 非满 */
+    *uart = (uint8_t)c;
+#else
+    (void)c;
+#endif
 }
 
 /* ==================== 服务入口点（必须在代码段最前面） ==================== */
@@ -62,7 +71,11 @@ static uint8_t current_color = VGA_COLOR(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
 
 /* 内存写函数 */
 static inline void write_mem16(void *addr, uint16_t value) {
+#if defined(__x86_64__) || defined(__i386__)
     __asm__ volatile("movw %0, (%1)" : : "r"(value), "r"(addr));
+#else
+    *(volatile uint16_t *)addr = value;
+#endif
 }
 
 /* 初始化 VGA 服务 */

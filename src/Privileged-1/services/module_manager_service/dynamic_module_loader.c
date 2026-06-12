@@ -57,6 +57,7 @@ static void log_error(const char *msg);
 #define ELF_MAGIC3 'F'
 
 /* ELF 类型 */
+#define ET_REL     1   /* 可重定位文件 (.o) */
 #define ET_EXEC    2
 #define ET_DYN     3
 
@@ -458,7 +459,11 @@ static uint64_t elf_find_symbol(const void *elf_data, const char *symbol_name)
         }
         
         if (symbol_name[j] == '\0' && name[j] == '\0') {
-            /* 找到符号 */
+            /* 找到符号 — .o 文件加节偏移 */
+            if (ehdr->e_type == ET_REL && syms[i].st_shndx > 0 &&
+                (unsigned)syms[i].st_shndx < ehdr->e_shnum) {
+                return shdrs[syms[i].st_shndx].sh_offset + syms[i].st_value;
+            }
             return syms[i].st_value;
         }
     }
@@ -467,8 +472,37 @@ static uint64_t elf_find_symbol(const void *elf_data, const char *symbol_name)
 }
 
 /**
+ * elf_symbol_file_offset — 将 ELF 符号值转换为文件偏移
+ *
+ * 对于 .o (ET_REL) 文件，st_value 是节内偏移，需要加上节的
+ * 文件偏移才能得到实际位置。对于已链接的 ELF 则直接返回 st_value。
+ *
+ * @param elf_data      ELF 文件数据
+ * @param sym_value     符号值（来自 elf_find_symbol 的返回值）
+ * @param sym_section   Ndx（来自符号表的 st_shndx），0=未定义
+ * @return 文件偏移（绝对位置）
+ */
+static uint64_t elf_symbol_file_offset(const void *elf_data,
+                                        uint64_t sym_value,
+                                        int sym_section)
+{
+    const elf64_ehdr_t *ehdr = (const elf64_ehdr_t *)elf_data;
+
+    /* 已链接的可执行文件或共享库：st_value 就是虚拟地址 */
+    if (ehdr->e_type != ET_REL) return sym_value;
+
+    /* .o 文件：需要定位节并加偏移 */
+    if (sym_section <= 0 || (unsigned)sym_section >= ehdr->e_shnum)
+        return sym_value;
+
+    const elf64_shdr_t *shdrs = (const elf64_shdr_t *)
+        ((const uint8_t *)elf_data + ehdr->e_shoff);
+    return shdrs[sym_section].sh_offset + sym_value;
+}
+
+/**
  * 查找多个符号地址
- * 
+ *
  * @param elf_data ELF 文件数据
  * @param names 符号名称数组
  * @param addrs 输出地址数组
@@ -778,17 +812,15 @@ hic_status_t dynamic_verify_module(const void *module_data, u32 module_size)
         return HIC_INVALID_PARAM;
     }
     
-    /* 检查签名标志 */
-    if ((header->flags & 0x01) == 0) {
-        /* 无签名模块，跳过验证 */
-        log_info("模块无签名，跳过验证");
-        return HIC_SUCCESS;
-    }
-    
-    /* 检查签名区域 */
-    if (header->signature_offset == 0 || header->signature_size == 0) {
-        log_info("模块无签名数据");
-        return HIC_SUCCESS;
+    /* 签名检查 raw offset 兼容 V1/V2 */
+    {
+        u32 hv = *(const u32 *)((const u8 *)module_data + 4);
+        u32 so = (hv >= 2) ? *(const u32 *)((const u8 *)module_data + 64) : *(const u32 *)((const u8 *)module_data + 40);
+        u32 ss = (hv >= 2) ? *(const u32 *)((const u8 *)module_data + 68) : *(const u32 *)((const u8 *)module_data + 64);
+        if (so == 0 || ss == 0) {
+            log_info("模块无签名数据");
+            return HIC_SUCCESS;
+        }
     }
     
     /* 计算模块哈希 */
@@ -860,8 +892,8 @@ hic_status_t dynamic_create_sandbox(const void *module_data, u32 module_size,
             code_size = *(const u32 *)((const u8 *)module_data + arch_tbl + 12);
             data_size = *(const u32 *)((const u8 *)module_data + arch_tbl + 20);
         } else {
-            code_size = header->code_size;
-            data_size = header->data_size;
+            code_size = header->header_size;
+            data_size = header->metadata_size;
         }
         total_size = code_size + data_size;
         
@@ -890,7 +922,7 @@ hic_status_t dynamic_create_sandbox(const void *module_data, u32 module_size,
                 /* V2 的 code_size 已在前面从 arch section 读过了 */
             } else {
                 code_src = (const uint8_t *)module_data + sizeof(hicmod_header_t);
-                hdr_copy_size = header->code_size;
+                hdr_copy_size = header->header_size;
             }
 
             module_memcpy((void *)phys_addr, code_src, hdr_copy_size);
@@ -929,6 +961,9 @@ hic_status_t dynamic_create_sandbox(const void *module_data, u32 module_size,
             if (st == 0 && svc_id != 0) {
                 entry->endpoint = svc_id;
                 log_info("IPC endpoint created\n");
+                /* 在 IPC3 名称表中注册服务名，供运行时查找 */
+                extern void ipc3_set_service_name(uint32_t, const char*);
+                ipc3_set_service_name(svc_id, entry->name);
             }
         }
 
@@ -1162,11 +1197,133 @@ typedef struct {
 /* 所需 ELF 常量和结构体已在文件头部定义 */
 
 /**
- * 查找外部符号地址
+ * 外部符号表 — 动态加载的模块可调用的内核函数
  *
- * 子模块引用的内核函数（memset、strcmp 等）在模块管理器加载时
- * 已被 init_launcher 解析。此处直接取其函数指针作为地址。
+ * 子模块通过 ELF 导入这些符号，加载器在处理 SHT_RELA 时查此表。
+ * 注意：模块运行在独立域页表下，函数地址必须在域页表中可访问。
+ * 当前使用恒等映射的物理地址（所有域都能访问内核代码段）。
  */
+typedef struct {
+    const char *name;
+    uint64_t addr;
+} external_symbol_t;
+
+static const external_symbol_t kernel_syms[] = {
+    {"ipc3_get_entry_va",      (uint64_t)ipc3_get_entry_va},
+    {"ipc3_register_service",  (uint64_t)ipc3_register_service},
+    {"ipc3_authorize",         (uint64_t)ipc3_authorize},
+    {"service_find_by_name",   (uint64_t)service_find_by_name},
+    {"module_memory_alloc",    (uint64_t)module_memory_alloc},
+    {"module_domain_start",    (uint64_t)module_domain_start},
+    {"module_thread_yield",    (uint64_t)module_thread_yield},
+    {"module_memset",          (uint64_t)module_memset},
+    {"module_memcpy",          (uint64_t)module_memcpy},
+    {"module_get_service_entry", (uint64_t)module_get_service_entry},
+    {NULL, 0},
+};
+
+static uint64_t find_external_symbol(const char *name)
+{
+    for (int i = 0; kernel_syms[i].name != NULL; i++) {
+        const char *s1 = kernel_syms[i].name;
+        int j;
+        for (j = 0; s1[j] && name[j] && s1[j] == name[j]; j++) {}
+        if (s1[j] == '\0' && name[j] == '\0')
+            return kernel_syms[i].addr;
+    }
+    return 0;
+}
+
+/**
+ * apply_relocations — 处理 ELF 重定位，解析外部符号
+ *
+ * 遍历 SHT_RELA 节，对外部符号（st_shndx == 0）查 kernel_syms 表，
+ * 对内部符号加节偏移。结果写入已加载模块的对应位置。
+ */
+static int apply_relocations(const void *elf_data, uint64_t code_base,
+                              const elf64_ehdr_t *ehdr)
+{
+    const elf64_shdr_t *shdrs = (const elf64_shdr_t *)
+        ((const uint8_t *)elf_data + ehdr->e_shoff);
+    int error_count = 0;
+
+    /* 找符号表和字符串表 */
+    const elf64_shdr_t *symtab = NULL;
+    const char *strtab_data = NULL;
+    int num_syms = 0;
+    const elf64_sym_t *syms = NULL;
+
+    for (u32 i = 0; i < ehdr->e_shnum; i++) {
+        if (shdrs[i].sh_type == SHT_SYMTAB || shdrs[i].sh_type == SHT_DYNSYM) {
+            symtab = &shdrs[i];
+            syms = (const elf64_sym_t *)((const uint8_t *)elf_data + symtab->sh_offset);
+            num_syms = symtab->sh_size / sizeof(elf64_sym_t);
+            if (symtab->sh_link < ehdr->e_shnum) {
+                strtab_data = (const char *)elf_data + shdrs[symtab->sh_link].sh_offset;
+            }
+            break;
+        }
+    }
+    if (!symtab) return 0;
+
+    /* 遍历所有 SHT_RELA 节 */
+    for (u32 i = 0; i < ehdr->e_shnum; i++) {
+        if (shdrs[i].sh_type != SHT_RELA) continue;
+
+        const elf64_rela_t *relas = (const elf64_rela_t *)
+            ((const uint8_t *)elf_data + shdrs[i].sh_offset);
+        int num_relas = shdrs[i].sh_size / sizeof(elf64_rela_t);
+
+        for (int j = 0; j < num_relas; j++) {
+            uint64_t r_offset = relas[j].r_offset;
+            uint64_t r_info   = relas[j].r_info;
+            int64_t  r_addend = relas[j].r_addend;
+            uint32_t sym_idx  = ELF64_R_SYM(r_info);
+            uint32_t type     = ELF64_R_TYPE(r_info);
+
+            if (sym_idx >= (uint32_t)num_syms) { error_count++; continue; }
+            uint64_t sym_value = syms[sym_idx].st_value;
+            uint16_t sym_shndx = syms[sym_idx].st_shndx;
+
+            /* 计算符号指向的地址 S */
+            uint64_t S;
+            if (sym_shndx == 0) {
+                S = find_external_symbol(strtab_data ? strtab_data + syms[sym_idx].st_name : "");
+                if (!S) { error_count++; continue; }
+            } else if (sym_shndx < ehdr->e_shnum) {
+                S = code_base + shdrs[sym_shndx].sh_offset + sym_value;
+            } else {
+                S = sym_value;
+            }
+
+            /* 目标地址 P = code_base + target_sec.sh_offset + r_offset */
+            uint32_t tgt_ndx = shdrs[i].sh_info;
+            uint64_t target_off = (tgt_ndx < ehdr->e_shnum) ? shdrs[tgt_ndx].sh_offset : 0;
+            uint64_t P = code_base + target_off + r_offset;
+
+            switch (type) {
+                case R_X86_64_64:
+                    *(uint64_t *)(uintptr_t)P = S + r_addend;
+                    break;
+                case R_X86_64_PC32:
+                case R_X86_64_PLT32:
+                    *(uint32_t *)(uintptr_t)P = (uint32_t)(S + r_addend - P);
+                    break;
+                case R_X86_64_32:
+                case R_X86_64_32S:
+                    *(uint32_t *)(uintptr_t)P = (uint32_t)(S + r_addend);
+                    break;
+                case R_X86_64_RELATIVE:
+                    *(uint64_t *)(uintptr_t)P = code_base + r_addend;
+                    break;
+                default:
+                    error_count++;
+                    break;
+            }
+        }
+    }
+    return error_count;
+}
 
 /* ==================== 依赖管理 ==================== */
 
@@ -1498,23 +1655,38 @@ int dynamic_module_load_all(void)
         }
     }
     
-    /* 模块间通信通过服务注册 + IPC 3.0，不在 ABI 中硬编码 partner 信息。
-     * 模块不知道其他模块的存在，只知道它可以调用的服务。 */
-    {
-        uint64_t prev_entry = 0;
-        uint32_t prev_domain = 0;
-        for (u32 i = 0; i < g_load_ctx.entry_count; i++) {
-            dynamic_module_entry_t *e = &g_load_ctx.entries[i];
-            if (e->state != DLOAD_RUNNING || !e->endpoint || !e->code_base) continue;
-
-            uint64_t this_entry = ipc3_get_entry_va(e->endpoint);
-
-            /* 链式授权：前一个域可调用当前模块的 IPC 端点 */
-            if (prev_entry && this_entry)
-                ipc3_authorize(e->endpoint, prev_domain);
-
-            prev_entry = this_entry;
-            prev_domain = e->domain;
+    /* 基于依赖声明的 IPC 授权
+     * 模块在 hicmod.txt [dependencies] 中声明它需要调用哪些服务。
+     * 加载器读取声明后，对每个已注册的服务端点调用 ipc3_authorize，
+     * 授予当前模块的域调用权。
+     *
+     * 替换了原来的链式授权（按加载顺序而非实际需求）。 */
+    for (u32 i = 0; i < g_load_ctx.entry_count; i++) {
+        dynamic_module_entry_t *e = &g_load_ctx.entries[i];
+        if (e->state != DLOAD_RUNNING) continue;
+        for (int j = 0; j < e->dep_count; j++) {
+            /* 先在已加载的动态模块中查找 */
+            uint32_t dep_svc = 0;
+            u32 k;
+            for (k = 0; k < g_load_ctx.entry_count; k++) {
+                if (str_cmp(g_load_ctx.entries[k].name, e->dependencies[j]) == 0 &&
+                    g_load_ctx.entries[k].endpoint) {
+                    dep_svc = g_load_ctx.entries[k].endpoint;
+                    break;
+                }
+            }
+            /* 再查服务注册表（静态模块） */
+            if (dep_svc == 0) {
+                service_endpoint_t *ep = service_find_by_name(e->dependencies[j]);
+                if (ep) dep_svc = ep->endpoint_handle;
+            }
+            if (dep_svc) {
+                ipc3_authorize(dep_svc, e->domain);
+                log_info("  authorized ");
+                log_info(e->dependencies[j]);
+                log_info(" for ");
+                log_info(e->name);
+            }
         }
     }
 
@@ -1567,6 +1739,27 @@ static hic_status_t dynamic_module_load_internal(dynamic_module_entry_t *entry)
     if (status != HIC_SUCCESS) {
         entry->last_error = status;
         return status;
+    }
+
+    /* 步骤3.5: 处理 ELF 重定位（解析外部符号）
+     * HICM V2 的代码数据在 code_offset 处，从中找到 ELF 头。 */
+    {
+        u32 hdr_magic = *(const u32 *)((const u8 *)g_module_buffer);
+        u32 hdr_ver   = *(const u32 *)((const u8 *)g_module_buffer + 4);
+        if (hdr_magic == 0x48494B4D && hdr_ver >= 2) {
+            u32 atbl = *(const u32 *)((const u8 *)g_module_buffer + 40);
+            u32 coff = *(const u32 *)((const u8 *)g_module_buffer + atbl + 12);
+            const void *elf = (const uint8_t *)g_module_buffer + coff;
+            const elf64_ehdr_t *ehdr = (const elf64_ehdr_t *)elf;
+            if (elf_validate_header(ehdr)) {
+                int errs = apply_relocations(elf, entry->code_base, ehdr);
+                if (errs) {
+                    log_error("  reloc errors");
+                } else {
+                    log_info("  relocations OK");
+                }
+            }
+        }
     }
 
     /* 步骤4: 启动模块 */

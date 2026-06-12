@@ -1,3 +1,4 @@
+#include <stdbool.h>
 /**
  * 控制台输出实现
  */

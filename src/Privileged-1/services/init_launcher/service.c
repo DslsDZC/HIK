@@ -53,6 +53,7 @@ extern uint64_t module_cap_create_service(uint32_t domain_id, uint32_t *service_
 extern uint64_t module_domain_start(uint32_t domain_id, uint64_t entry_point);
 extern void module_thread_yield(void);
 extern uint64_t module_memory_alloc(uint32_t domain_id, uint64_t size, uint32_t type, uint64_t *phys_addr);
+extern uint64_t module_get_service_entry(const char *name);
 
 /* 哈希验证（由 Core-0 提供） */
 extern void sha384_hash(const uint8_t *data, uint32_t len, uint8_t *hash_out);
@@ -93,9 +94,10 @@ static struct {
 
 /* 使用 module_format.h 中的 HICMOD_MAGIC 和 hicmod_header_t */
 
-/* 临时缓冲区（用于加载模块） */
-#define MAX_MODULE_SIZE (8 * 1024 * 1024)  /* 8MB - 需要足够大以容纳 module_manager */
-static uint8_t g_module_buffer[MAX_MODULE_SIZE] __attribute__((aligned(4096)));
+/* 临时缓冲区（用于加载模块）— 按需分配，不占 .bss */
+#define MAX_MODULE_SIZE (1 * 1024 * 1024)  /* 1MB - 容纳 module_manager 足够 */
+extern uint64_t module_memory_alloc(uint32_t domain_id, uint64_t size, uint32_t type, uint64_t *phys_addr);
+static uint8_t *g_module_buffer = NULL;
 
 /* ========== 辅助函数 ========== */
 
@@ -406,6 +408,7 @@ extern uint32_t ipc3_register_service(uint32_t, uint64_t, uint64_t, uint32_t *);
 extern uint64_t ipc3_get_entry_va(uint32_t);
 extern uint32_t ipc3_unregister_service(uint32_t);
 extern uint32_t ipc3_authorize(uint32_t, uint32_t);
+extern void ipc3_set_service_name(uint32_t, const char *);
 
 /* 未实现的符号 - 提供占位符 */
 static void __stub_domain_parallel_create(void) { }
@@ -452,7 +455,9 @@ static uint64_t find_external_symbol(const char *name) {
         {"ipc3_register_service", (uint64_t)ipc3_register_service},
         {"ipc3_get_entry_va",     (uint64_t)ipc3_get_entry_va},
         {"ipc3_unregister_service",(uint64_t)ipc3_unregister_service},
+        {"module_get_service_entry", (uint64_t)module_get_service_entry},
         {"module_thread_yield",     (uint64_t)module_thread_yield},
+        {"ipc3_set_service_name",   (uint64_t)ipc3_set_service_name},
         {"shmem_alloc",             (uint64_t)shmem_alloc},
         {"shmem_map",               (uint64_t)shmem_map},
         {"ipc3_authorize",          (uint64_t)ipc3_authorize},
@@ -558,6 +563,11 @@ static int apply_elf_relocations(uint8_t *elf_base, size_t elf_size, uint64_t bs
         if (sh_info >= (uint32_t)ehdr->e_shnum) continue;
 
         /* 获取目标节的信息 */
+        uint32_t target_type;
+        module_memcpy(&target_type, &shdrs[sh_info].sh_type, sizeof(uint32_t));
+        /* .bss (NOBITS) 零初始化，无重定位需求 */
+        if (target_type == 8) continue;
+
         uint64_t target_offset, target_size;
         module_memcpy(&target_offset, &shdrs[sh_info].sh_offset, sizeof(uint64_t));
         module_memcpy(&target_size, &shdrs[sh_info].sh_size, sizeof(uint64_t));
@@ -740,12 +750,31 @@ int init_launcher_start(void) {
     launcher_log("Service started - Loading module_manager");
     launcher_log("========================================");
     
+    /* 步骤0: 分配模块读取缓冲区 */
+    if (g_module_buffer == NULL) {
+        uint64_t buf_phys = 0;
+        uint64_t ret = module_memory_alloc(0, MAX_MODULE_SIZE, 0, &buf_phys);
+        if (ret == 0 && buf_phys != 0) {
+            g_module_buffer = (uint8_t *)(uintptr_t)buf_phys;
+            launcher_log("Module buffer allocated dynamically");
+        } else {
+            launcher_log("ERROR: Failed to allocate module buffer");
+            return -1;
+        }
+    }
+
     /* 步骤1: FAT32 应在启动前已初始化，等待线程稳定 */
     launcher_log("Step 1: Brief delay for service threads...");
 
     /* 简单延迟（自旋等待，避免 thread_yield 触发调度器问题） */
     for (volatile int i = 0; i < 500000; i++) {
+#if defined(__x86_64__) || defined(__i386__)
         __asm__ volatile("pause");
+#elif defined(__aarch64__)
+        __asm__ volatile("yield");
+#else
+        __asm__ volatile("nop");
+#endif
     }
     
         /* 步骤2: 读取模块管理器 */
@@ -849,7 +878,16 @@ int init_launcher_start(void) {
     
     if (status != 0) {
         launcher_log("ERROR: Failed to create domain");
-        while (1) { __asm__ volatile("hlt"); /* 避免调度器切换导致的崩溃 */ }
+        while (1) {
+#if defined(__x86_64__) || defined(__i386__)
+            __asm__ volatile("hlt");
+#elif defined(__aarch64__)
+            __asm__ volatile("wfi");
+#else
+            __asm__ volatile("" ::: "memory");
+#endif
+            /* 避免调度器切换导致的崩溃 */
+        }
     }
     
     launcher_log("Domain created");
@@ -862,7 +900,16 @@ int init_launcher_start(void) {
 
     if (status != 0) {
         launcher_log("ERROR: Failed to create service");
-        while (1) { __asm__ volatile("hlt"); /* 避免调度器切换导致的崩溃 */ }
+        while (1) {
+#if defined(__x86_64__) || defined(__i386__)
+            __asm__ volatile("hlt");
+#elif defined(__aarch64__)
+            __asm__ volatile("wfi");
+#else
+            __asm__ volatile("" ::: "memory");
+#endif
+            /* 避免调度器切换导致的崩溃 */
+        }
     }
 
     launcher_log("Service created");
@@ -895,7 +942,15 @@ int init_launcher_start(void) {
     status = module_memory_alloc(new_domain, total_size, 0, &phys_addr);
     if (status != 0 || phys_addr == 0) {
         launcher_log("ERROR: Failed to allocate memory");
-        while (1) { __asm__ volatile("hlt"); }
+        while (1) {
+#if defined(__x86_64__) || defined(__i386__)
+            __asm__ volatile("hlt");
+#elif defined(__aarch64__)
+            __asm__ volatile("wfi");
+#else
+            __asm__ volatile("" ::: "memory");
+#endif
+        }
     }
     module_memcpy((void*)(uintptr_t)phys_addr, g_module_buffer + code_offset, code_size);
 
@@ -932,7 +987,15 @@ int init_launcher_start(void) {
     status = module_domain_start(new_domain, entry_point);
     if (status != 0) {
         launcher_log("ERROR: Failed to start module");
-        while (1) { __asm__ volatile("hlt"); }
+        while (1) {
+#if defined(__x86_64__) || defined(__i386__)
+            __asm__ volatile("hlt");
+#elif defined(__aarch64__)
+            __asm__ volatile("wfi");
+#else
+            __asm__ volatile("" ::: "memory");
+#endif
+        }
     }
     launcher_log(">>> Module manager started successfully <<<");
     

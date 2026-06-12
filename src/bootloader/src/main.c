@@ -1,4 +1,5 @@
 
+#define HIC_ARCH_X86_64 0
 /**
  * HIC UEFI Bootloader
  * 第一引导层：UEFI引导加载程序
@@ -1393,7 +1394,7 @@ EFI_STATUS exit_boot_services(__attribute__((unused)) hic_boot_info_t *boot_info
  * - 验证栈地址有效
  * - 记录详细的跳转信息
  */
-__attribute__((noreturn))
+
 static void write_tlv(hic_boot_info_t *bi)
 {
     boot_info_header_t *hdr = (boot_info_header_t *)BOOT_INFO_ADDR;
@@ -1402,38 +1403,45 @@ static void write_tlv(hic_boot_info_t *bi)
 
     if (bi->mem_map && bi->mem_map_entry_count > 0) {
         pos = tlv_put(pos, TAG_MEM_MAP, bi->mem_map,
-                       bi->mem_map_entry_count * sizeof(memory_map_entry_t));
+                       (uint32_t)(bi->mem_map_entry_count * sizeof(memory_map_entry_t)));
         count++;
     }
     pos = tlv_put(pos, TAG_CPU_COUNT, &bi->system.cpu_count, 4); count++;
     if (bi->rsdp) {
         pos = tlv_put(pos, TAG_RSDP, &bi->rsdp, 8); count++;
     }
-    if (bi->kernel_base)
+    if (bi->kernel_base) {
         pos = tlv_put(pos, TAG_KERNEL_BASE, &bi->kernel_base, 8); count++;
+    }
     pos = tlv_put(pos, TAG_KERNEL_SIZE, &bi->kernel_size, 8); count++;
     pos = tlv_put(pos, TAG_ENTRY_POINT, &bi->entry_point, 8); count++;
-    if (bi->stack_top)
+    if (bi->stack_top) {
         pos = tlv_put(pos, TAG_STACK_TOP, &bi->stack_top, 8); count++;
-    if (bi->cmdline[0])
+    }
+    if (bi->cmdline[0]) {
         pos = tlv_put(pos, TAG_CMDLINE, bi->cmdline, 64); count++;
+    }
     pos = tlv_put(pos, TAG_ARCH, &bi->system.architecture, 4); count++;
 
-    if (bi->debug.serial_port)
+    if (bi->debug.serial_port) {
         pos = tlv_put(pos, TAG_SERIAL_PORT, &bi->debug.serial_port, 2); count++;
-    if (bi->video.framebuffer_base)
+    }
+    if (bi->video.framebuffer_base) {
         pos = tlv_put(pos, TAG_FRAMEBUFFER, &bi->video, sizeof(bi->video)); count++;
-    if (bi->disk.disk_base)
+    }
+    if (bi->disk.disk_base) {
         pos = tlv_put(pos, TAG_DISK_INFO, &bi->disk, sizeof(bi->disk)); count++;
+    }
 
     pos = tlv_put(pos, TAG_GDT, &bi->gdt, sizeof(bi->gdt)); count++;
 
-    if (bi->hardware.hw_data && bi->hardware.hw_size > 0)
-        pos = tlv_put(pos, TAG_HARDWARE_DATA, bi->hardware.hw_data, bi->hardware.hw_size); count++;
+    if (bi->hardware.hw_data && (uint32_t)bi->hardware.hw_size > 0) {
+        pos = tlv_put(pos, TAG_HARDWARE_DATA, bi->hardware.hw_data, (uint32_t)bi->hardware.hw_size); count++;
+    }
 
     if (bi->module_count > 0) {
         pos = tlv_put(pos, TAG_MODULE, bi->modules,
-                       bi->module_count * sizeof(bi->modules[0])); count++;
+                       (uint32_t)(bi->module_count * sizeof(bi->modules[0]))); count++;
     }
 
     hdr->magic = BOOT_INFO_MAGIC;

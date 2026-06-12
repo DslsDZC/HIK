@@ -109,19 +109,19 @@ static hic_status_t load_module_from_memory(const char *name, const void *data, 
     }
     
     /* 提取代码数据 */
-    if (header->code_size == 0 || header->header_size + header->code_size > size) {
+    if (*(const u32 *)((const u8 *)header + 32) == 0 || header->header_size + *(const u32 *)((const u8 *)header + 32) > size) {
         return HIC_PARSE_FAILED;
     }
     
     code_data = (const u8 *)data + header->header_size;
     
     /* 分配内存并复制代码 */
-    code_base = module_alloc(header->code_size);
+    code_base = module_alloc(*(const u32 *)((const u8 *)header + 32));
     if (!code_base) {
         return HIC_OUT_OF_MEMORY;
     }
     
-    memcpy(code_base, code_data, header->code_size);
+    memcpy(code_base, code_data, *(const u32 *)((const u8 *)header + 32));
     
     /* 初始化模块信息 */
     memset(module, 0, sizeof(module_instance_t));
@@ -131,8 +131,8 @@ static hic_status_t load_module_from_memory(const char *name, const void *data, 
     module->version = header->semantic_version;
     module->state = MODULE_STATE_loaded;
     module->code_base = code_base;
-    module->code_size = header->code_size;
-    module->flags = header->flags;
+    module->code_size = *(const u32 *)((const u8 *)header + 32);
+    module->flags = *(const u32 *)((const u8 *)header + 68);
     module->instance_id = g_module_count;
     module->auto_restart = 1;  /* 默认启用自动重启 */
     module->restart_count = 0;
@@ -564,7 +564,7 @@ hic_status_t module_backup_state(const char *name) {
     header->module_version = module->version;
     header->state_size = state_size;
     header->timestamp = get_current_timestamp();
-    header->flags = MODULE_BACKUP_FLAG_NONE;
+    *(u32 *)((u8 *)header + 68) = MODULE_BACKUP_FLAG_NONE;
     
     /* 导出状态数据 */
     if (module->migration.export_state) {
@@ -647,7 +647,7 @@ hic_status_t module_restore_state(const char *name) {
     /* 检查版本兼容性 */
     if (!is_version_compatible(header->module_version, module->version)) {
         /* 版本不兼容，尝试兼容性恢复 */
-        if (!(header->flags & MODULE_BACKUP_FLAG_INCREMENTAL)) {
+        if (!(*(const u32 *)((const u8 *)header + 68) & MODULE_BACKUP_FLAG_INCREMENTAL)) {
             return HIC_VERSION_MISMATCH;
         }
     }

@@ -425,4 +425,22 @@ u32 domain_get_allowed_sched_policies(domain_id_t domain_id);
  */
 hic_status_t domain_set_sched_policies(domain_id_t domain_id, u32 policy_mask);
 
+/* ==================== MMIO 配置（从 platform.yaml 加载） ==================== */
+
+/** MMIO 配置条目（匹配 platform.yaml static_modules[].mmio_regions[]） */
+typedef struct {
+    char        name[48];
+    phys_addr_t base;
+    size_t      size;
+} mmio_cfg_entry_t;
+
+/** 从 platform.yaml 解析 static_modules[].mmio_regions */
+void mmio_load_config_from_yaml(void);
+
+/** 按服务名查找 MMIO 配置，NULL 表示无声明 */
+const mmio_cfg_entry_t* mmio_config_for_service(const char *service_name);
+
+/** #PF 惰性 MMIO 映射处理 — 中断处理程序调用 */
+bool mmio_handle_pf(u64 cr2, u64 err_code);
+
 #endif /* HIC_KERNEL_DOMAIN_H */

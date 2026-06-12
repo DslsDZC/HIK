@@ -198,6 +198,7 @@ hic_status_t thread_terminate(thread_id_t thread_id)
  * x86_64 默认：thread_exit_handler / entry / 6×callee-saved
  * STM32(Cortex-M3)：xPSR / PC / LR / R12-R0 / R11-R4 (PendSV 帧)
  */
+
 __attribute__((weak))
 virt_addr_t arch_thread_setup_stack(virt_addr_t stack_top,
                                     virt_addr_t entry_point,
@@ -217,7 +218,7 @@ hic_status_t thread_create_bound(domain_id_t domain_id,
                                   priority_t priority,
                                   thread_id_t *out)
 {
-    if (out == NULL || domain_id >= HIC_DOMAIN_MAX) {
+    if (out == NULL || domain_id >= HIC_DOMAIN_MAX || entry_point == 0) {
         return HIC_ERROR_INVALID_PARAM;
     }
     
@@ -358,7 +359,7 @@ hic_status_t thread_create_bound(domain_id_t domain_id,
 hic_status_t thread_create(domain_id_t domain_id, virt_addr_t entry_point,
                           priority_t priority, thread_id_t *out)
 {
-    if (out == NULL || domain_id >= HIC_DOMAIN_MAX) {
+    if (out == NULL || domain_id >= HIC_DOMAIN_MAX || entry_point == 0) {
         return HIC_ERROR_INVALID_PARAM;
     }
     
@@ -473,18 +474,18 @@ hic_status_t thread_create(domain_id_t domain_id, virt_addr_t entry_point,
     
     /* 初始化栈：设置入口点和退出处理 */
     u64 *stack_top = (u64 *)(stack_phys + 4 * PAGE_SIZE);
-    
+
     /* 压入线程退出处理函数地址 */
     stack_top--;
     *stack_top = (u64)thread_exit_handler;
-    
+
     /* 压入入口点地址（作为首次调度的返回地址） */
     stack_top--;
     *stack_top = (u64)entry_point;
-    
+
     /* 为 callee-saved 寄存器预留空间 (rbx, rbp, r12-r15 = 6 个) */
     stack_top -= 6;
-    
+
     thread->stack_ptr = (virt_addr_t)stack_top;
 
     atomic_exit_critical(irq);

@@ -215,6 +215,25 @@ int static_module_load_all(void)
             continue;
         }
 
+        /* 步骤2.7: 创建设备 MMIO 能力（从 platform.yaml mmio_regions）
+         * YAML 解析在 STEP 10.5 完成，查表调用 cap_create_memory
+         * 带 CAP_MEM_DEVICE 标志，能力系统自动映射页表。 */
+        {
+            const mmio_cfg_entry_t *me = mmio_config_for_service(module->name);
+            if (me) {
+                cap_id_t cid;
+                hic_status_t cs = cap_create_memory(
+                    g_module_runtime[module_idx].domain_id,
+                    me->base, me->size,
+                    CAP_MEM_READ | CAP_MEM_WRITE | CAP_MEM_DEVICE, &cid);
+                if (cs == HIC_SUCCESS) {
+                    console_puts("[STATIC_MODULE]   IO cap created for ");
+                    console_puts(module->name);
+                    console_puts("\n");
+                }
+            }
+        }
+
         /* 步骤3: 注册服务端点 */
         console_puts("[STATIC_MODULE]   Step 3: Registering service endpoint...\n");
         if (static_module_register_service(module, module_idx) != 0) {

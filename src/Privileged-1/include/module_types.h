@@ -9,31 +9,17 @@
 
 #include "common.h"
 
-/* 模块魔数 */
-#define HICMOD_MAGIC 0x48494B4D  /* "HICM" */
-#define HICMOD_VERSION 1
+/* 模块格式 — 统一使用 V2（module_format.h），V1 已废弃 */
+#include "module_format.h"
+
+/* 为兼容旧代码，hicmod_header_t 在 module_format.h 中定义 */
+#define HICMOD_VERSION 2
 
 /* 最大模块数量 */
 #define MAX_MODULES 32
 
 /* 最大重试次数 */
 #define MAX_RESTART_ATTEMPTS 3
-
-/* 模块头结构（72字节） */
-typedef struct {
-    u32     magic;              /* 魔数: 0x48494B4D */
-    u32     version;            /* 模块格式版本 */
-    u8      uuid[16];           /* 模块 UUID */
-    u32     semantic_version;   /* 语义版本 (major<<16 | minor<<8 | patch) */
-    u32     api_desc_offset;    /* API 描述符偏移 */
-    u32     code_size;          /* 代码段大小 */
-    u32     data_size;          /* 数据段大小 */
-    u32     signature_offset;   /* 签名偏移 */
-    u32     header_size;        /* 头部大小 */
-    u8      checksum[16];       /* SHA-256 校验和 */
-    u32     signature_size;     /* 签名大小 */
-    u32     flags;              /* 标志位: bit0=已签名 */
-} __attribute__((packed)) hicmod_header_t;
 
 /* 模块状态 */
 typedef enum {

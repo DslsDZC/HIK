@@ -3,7 +3,7 @@
 
 # 项目根目录（相对于此Makefile）
 ROOT_DIR = ../..
-KERNEL_BIN = $(ROOT_DIR)/build/bin/hic-kernel.bin
+KERNEL_BIN = $(ROOT_DIR)/build/hic-kernel.bin
 
 # 编译器和工具
 UEFI_CC      = x86_64-w64-mingw32-gcc

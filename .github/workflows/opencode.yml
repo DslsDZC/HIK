@@ -31,3 +31,4 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         with:
           model: deepseek/deepseek-v4-flash
+          mentions: "/oc,/opencode"

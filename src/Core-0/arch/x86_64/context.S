@@ -222,6 +222,34 @@ context_switch:
 .global x86_64_context_switch
 .set x86_64_context_switch, context_switch
 
+/* ==================== 线程入口蹦床 ==================== */
+
+/**
+ * thread_entry_trampoline — 新线程首次运行的入口。
+ *
+ * context_switch 的 ret 到此处（仅第一次调度时），栈布局：
+ *   [thread_exit_handler]
+ *   [real_entry_point]    <- RSP 初始指向这里
+ *
+ * 蹦床弹出 real_entry_point，开中断（sti），然后跳转到真正的入口。
+ * 此后新线程以 IF=1 运行，可响应定时器中断实现抢占。
+ *
+ * 后续 reschedule（schedule 从 IRQ 路径被调用）走正常的
+ * context_switch → ret → exec_flow_dispatch → schedule → isr_fast_stub → iretq
+ * 路径，其中 iretq 从中断帧恢复 RFLAGS（含 IF），无需重复 sti。
+ *
+ * 这样做避免了在 context_switch 的 .L_restore 中直接 sti 导致的
+ * #GP 问题 —— 新域页表激活后立即响应中断时，中断处理所需的部分
+ * 全局页面（GDT/IDT.BSS）在该域页表中不可访问。
+ */
+.global thread_entry_trampoline
+.type thread_entry_trampoline, @function
+thread_entry_trampoline:
+    popq %r11           /* 弹出真正的入口点 */
+    sti                 /* 开启中断 — 此时新域页表已完备，中断可安全响应 */
+    jmp  *%r11          /* 跳转到线程真正的入口 */
+.size thread_entry_trampoline, .-thread_entry_trampoline
+
 /* ==================== 上下文初始化 ==================== */
 
 /**

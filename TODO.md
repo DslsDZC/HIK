@@ -1,34 +1,50 @@
 # TODO
 
-## Fixed
+## Fixed (2026-06-06)
 
-- [x] SSE `#UD` — kernel build flags add `-mno-sse -mno-sse2 -mno-mmx -mno-3dnow`
-- [x] Core-0 page table = 0x7000 — `pagetable_create()` + identity map 0-32MB
-- [x] Module manager thread stuck — `module_thread_yield()` cooperative scheduling
-- [x] IRQ EOI write to LAPIC 0xFEE00000 unmapped — use 8259 PIC port 0x20
-- [x] Remove duplicate `is_privileged_domain`
-- [x] Annotate magic numbers
-- [x] Remove `ap_start.S.backup` from git tracking + update `.gitignore`
-- [x] **Preemptive scheduling crash** — RSP→CR3 order + fast_path.S saves all regs + `g_reschedule_needed` check
-- [x] **Dynamic module loading null deref** — three-layer bug: stack canary + SSE + .bss unallocated
-- [x] **EFC integration** — done
-- [x] **IPC 3.0 Plan B** — done
-- [x] **Dynamic module loading E2E verified** — done
-- [x] **Cross-domain context_switch #GP** — IPC3 entry page jnc bug + Core-0 PT range fix
-- [x] **STM32F103C8T6 (Cortex-M3) port** — arch/stm32f103/ 11 files
+- [x] **Preemption sti #GP** — Root cause: `GDT_SIZE_64BIT` macro in `gdt.h:70` used
+      `(1 << 6)` (D/B bit) instead of `(1 << 5)` (L bit — Long mode). C code's GDT[1]
+      had L=0, making the descriptor a 32-bit compatibility segment. Interrupt delivery
+      re-read GDT from memory → saw L=0 → #GP(0x0008). Bootloader's GDT (`entry.S`)
+      was correct (0x00af...). Without sti the CS cache from bootloader was never refreshed.
+      **Fix**: `GDT_SIZE_64BIT = (1 << 5)`.
+      Files: `gdt.h`
+- [x] **g_module_buffer 8MB → 1MB** — init_launcher's static module buffer was sized at
+      8MB (`MAX_MODULE_SIZE`), the single largest contributor to kernel `.bss` (13.4MB).
+      Reduced to 1MB, dropping `.bss` to 6.3MB. Recommended follow-up: dynamic allocation.
+      File: `init_launcher/service.c`
+- [x] **pagetable_map error check** — `.bss` mapping return value was unchecked; silent
+      failure could leave GDT/IDT pages unmapped in domain page tables.
+      File: `domain.c`
+- [x] **thread_entry_trampoline** — New thread entry trampoline that does `sti` after
+      stack switch. sti moved out of `context_switch` to avoid #GP when pending timer
+      fires immediately with domain CR3 active. Trampoline runs in the thread's own
+      context, so all domain page table mappings (GDT/IDT via `.bss`) are available.
+      Files: `context.S`, `thread.c`, `scheduler.c`
+- [x] **exec_flow.c comment out of sync** — outdated comment about sti location synced.
+      File: `exec_flow.c`
+- [x] **CAP_MEM_DEVICE MMIO auto-mapping** — `cap_create_memory()` now auto-maps pages
+      into domain page table when `CAP_MEM_DEVICE` flag is set. VGA 0xB8000 fixed.
+      Files: `capability_core.c`, `static_module.c`, `platform.yaml`
 
 ## High priority
 
-- [ ] **Preemption sti #GP** — `sti` before `ret` in `context_switch` causes #GP on first
-      `context_switch(NULL, first_thread)`. Pending timer fires after `ret` with new CR3 loaded
-      but before first instruction of the new thread. Nested `schedule()` inside IRQ handler
-      corrupts execution flow.
-      Files: `fast_path.S`, `context.S`, `exec_flow_dispatch`
+- [ ] **MMIO config from platform.yaml** — MMIO mapping currently driven by a built-in
+      table in static_module.c (mirroring platform.yaml mmio_regions). Should parse
+      directly from platform.yaml so no kernel code change is needed for new devices.
+      Path: boot YAML parser → cap_create_memory(CAP_MEM_DEVICE) for each region.
+      (capability mechanism is done — CAP_MEM_DEVICE + auto page mapping)
+- [ ] **#PF demand paging for MMIO** — Lazy page mapping: instead of mapping all MMIO
+      at boot, leave PTEs invalid. #PF handler checks domain's IO capabilities and
+      maps on first access. Enables runtime capability revocation.
+      Requires: #PF handler extension, capability lookup in fault path.
+
 - [ ] **Three services crash at boot** — `memory_service`, `device_manager`, `security_monitor`
       commented out in `platform.yaml` with "crashes at boot (needs fix)"
       Impact: no memory management, device management, or security monitoring
-- [ ] **Chain authorization for modules** — `ipc3_authorize` in `dynamic_module_loader.c` is
-      chain-based (module A authorizes module B). Needs review if this matches the design intent.
+- [x] **Chain authorization for modules** — replaced with dependency-based authorization.
+      Modules declare `[dependencies]` in `hicmod.txt`, loader reads them and calls
+      `ipc3_authorize` for each declared service. No more load-order chaining.
 
 ## Maintainability
 
@@ -37,6 +53,8 @@
       the V1 struct. Any layout change silently corrupts data.
       Files: `src/Privileged-1/include/module_types.h`, `src/Privileged-1/include/module_format.h`
       Current workaround: raw byte offsets (no type safety)
+- [ ] **g_module_buffer should be dynamic** — static 1MB array in kernel `.bss` pollutes
+      every domain's page table. Allocate via PMM at runtime instead.
 - [ ] **ELF structs duplicated in three places** — Python (create_hicmod.py), C module manager,
       C kernel (module_loader.h)
 - [ ] **Two thread creation paths** — `thread_create_bound` (static modules) vs `thread_create`
@@ -45,9 +63,8 @@
 - [ ] **Four-layer module loading** — linker(.static_modules) → static_module.c → init_launcher →
       module_manager. Each layer partially reimplements domain creation + memory mapping +
       thread startup. Bugs require tracing through all four layers.
-- [ ] **Comments out of sync with code** — `exec_flow.c:155` claims "context_switch does sti
-      in .L_restore" but context.S has no sti. `fast_path.S` comment says "cooperative
-      scheduling" but the code now has preemption checks.
+- [ ] **Comments out of sync with code** — `fast_path.S` comment says "cooperative
+      scheduling" but the code now has preemption checks and sti.
 - [ ] **V2 arch section accessed via raw byte offsets** — `dynamic_module_loader.c` hardcodes
       offsets (`+12`=code_size, `+36`=entry_offset) instead of using struct field names.
       Fragile: depends on `create_hicmod.py` and `module_format.h` staying in sync.

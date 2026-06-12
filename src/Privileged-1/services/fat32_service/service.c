@@ -36,7 +36,13 @@ int _fat32_service_entry(void)
     
     /* 服务不应返回，如果返回则进入无限循环 */
     while (1) {
+#if defined(__x86_64__) || defined(__i386__)
         __asm__ volatile("hlt");
+#elif defined(__aarch64__)
+        __asm__ volatile("wfi");
+#else
+        __asm__ volatile("" ::: "memory");
+#endif
     }
     
     return 0;
@@ -256,11 +262,20 @@ hic_status_t fat32_init_device(void) {
     fat32_ext_bpb_t *ext_bpb;
     uint16_t *signature;
     
-    /* 使用 IDE 驱动读取第一个扇区 */
-    if (ide_read_sector(0, g_sector_buffer) != 0) {
+    /* 使用 IDE 驱动读取第一个扇区 —— IDE 可能还在初始化，重试 */
+    int ide_retries = 0;
+    while (ide_read_sector(0, g_sector_buffer) != 0) {
         extern void serial_print(const char *msg);
-        serial_print("[FAT32] Failed to read boot sector via IDE\n");
-        return HIC_ERROR;
+        if (ide_retries == 0) serial_print("[FAT32] Waiting for IDE...\n");
+        for (volatile int d = 0; d < 50000; d++) {}  /* ～ms 级延迟 */
+        if (++ide_retries > 500) {
+            serial_print("[FAT32] Failed to read boot sector via IDE\n");
+            return HIC_ERROR;
+        }
+    }
+    if (ide_retries > 0) {
+        extern void serial_print(const char *);
+        serial_print("[FAT32] IDE ready (retried)\n");
     }
     
     /* 解析 BPB */

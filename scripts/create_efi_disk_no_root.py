@@ -124,11 +124,32 @@ def create_fat32_image(disk_path, bootloader_path, kernel_path,
             print(f"  共复制 {len(module_files)} 个模块文件")
 
             # 自动生成 MODULES.LIS（排除已在运行的模块管理器）
+            # 格式: NAME auto:yes [deps:dep1,dep2,...]
             modules_list = ""
             for f in module_files:
                 if f.startswith('module_manager'): continue
                 mod_name = f.replace('.hicmod', '')[:8].upper()
-                modules_list += f"{mod_name} auto:yes\n"
+
+                # 读取 hicmod.txt 中的 [dependencies] 声明
+                deps = ""
+                mod_name_full = f.replace('.hicmod', '')
+                txt_path = f'src/Privileged-1/services/{mod_name_full}/hicmod.txt'
+                if os.path.exists(txt_path):
+                    in_deps = False
+                    with open(txt_path) as tf:
+                        for line in tf:
+                            ls = line.strip()
+                            if ls == '[dependencies]':
+                                in_deps = True
+                                continue
+                            if ls.startswith('[') and in_deps:
+                                in_deps = False
+                            if in_deps and '=' in ls:
+                                dep_name = ls.split('=')[0].strip().upper()[:8]
+                                if deps: deps += ','
+                                deps += dep_name
+                dep_str = f" deps:{deps}" if deps else ""
+                modules_list += f"{mod_name} auto:yes{dep_str}\n"
             list_tmp = '/tmp/hic_MODULES.LIS'
             with open(list_tmp, 'w') as fh:
                 fh.write(modules_list)

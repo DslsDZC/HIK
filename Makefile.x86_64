@@ -76,12 +76,16 @@ p1-modules:
 		|| echo "  ✗ $(m).hicmod build FAILED (non-fatal)"; \
 	)
 
-# UEFI 引导程序路径（需提前构建：cd src/bootloader && make uefi）
+# UEFI bootloader
 bootloader_efi = src/bootloader/bin/bootx64.efi
 
+.PHONY: bootloader
+bootloader: $(bootloader_efi)
+$(bootloader_efi):
+	$(MAKE) -C src/bootloader uefi
 EFI_DISK = $(BUILD)/hic-disk.img
 
-$(EFI_DISK): $(BIN) p1-modules
+$(EFI_DISK): $(BIN) p1-modules | $(bootloader_efi)
 	python3 scripts/create_efi_disk_no_root.py \
 		--bootloader $(bootloader_efi) \
 		--kernel $(BIN) \

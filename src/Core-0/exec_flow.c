@@ -76,6 +76,14 @@ hic_status_t exec_flow_create(domain_id_t domain, virt_addr_t entry,
         return HIC_ERROR_INVALID_PARAM;
     }
 
+    /* Ensure entry point is valid */
+    if (entry == 0) {
+        console_puts("[EFC] FATAL: NULL entry point for domain ");
+        console_putu32(domain);
+        console_puts("\n");
+        return HIC_ERROR_INVALID_PARAM;
+    }
+
     /* Create underlying thread (mechanism: stack alloc, context init) */
     thread_id_t tid;
     hic_status_t status = thread_create(domain, entry, HIC_PRIORITY_NORMAL, &tid);
@@ -152,7 +160,7 @@ hic_status_t exec_flow_dispatch(exec_flow_id_t efc, logical_core_id_t lcore)
     g_current_thread = next;
     g_current_efc = efc;
 
-    /* context_switch 在 .L_restore 中已 sti，确保新线程 IF=1 */
+    /* context_switch 通过 thread_entry_trampoline 做 sti，确保新线程 IF=1 */
     context_switch(prev, next);
 
     /*

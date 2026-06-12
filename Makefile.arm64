@@ -1,7 +1,7 @@
 ARCH ?= arm64
-CC = gcc
-LD = gcc
-OBJCOPY = objcopy
+CC = aarch64-linux-gnu-gcc
+LD = aarch64-linux-gnu-gcc
+OBJCOPY = aarch64-linux-gnu-objcopy
 ROOT = $(CURDIR)
 CORE0 = $(ROOT)/src/Core-0
 P1DIR = $(ROOT)/src/Privileged-1

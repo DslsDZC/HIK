@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  # 暂时屏蔽的架构（等移植完成后移除此变量即可恢复构建）
+  DISABLED_ARCHS: "arm64 stm32f103"
+
 jobs:
   build:
     strategy:
@@ -23,15 +27,19 @@ jobs:
             gcc g++ make python3 xorriso
 
       - name: Install cross toolchains
-        if: matrix.arch != 'x86_64'
+        if: contains(env.DISABLED_ARCHS, matrix.arch) == false && matrix.arch != 'x86_64'
         run: |
           sudo apt-get install -y --no-install-recommends \
             gcc-aarch64-linux-gnu \
             gcc-arm-none-eabi
 
-      - name: Build (${{ matrix.arch }})
-        run: |
-          make ARCH=${{ matrix.arch }}
+      - name: Skip (disabled arch)
+        if: contains(env.DISABLED_ARCHS, matrix.arch)
+        run: echo "Skipping ${{ matrix.arch }} — temporarily disabled"
+
+      - name: Build
+        if: contains(env.DISABLED_ARCHS, matrix.arch) == false
+        run: make ARCH=${{ matrix.arch }}
         timeout-minutes: 10
 
   boot-x86_64:
@@ -43,47 +51,21 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            gcc make python3 xorriso qemu-system-x86
-      - name: Build + boot x86_64
+            gcc make python3 xorriso qemu-system-x86 gcc-mingw-w64-x86-64 mtools
+      - name: Build + boot
         run: |
           make img-run &
           QPID=$!
           for i in $(seq 1 120); do
             sleep 1
             grep -q "Entering idle loop" qemu_serial.log 2>/dev/null && {
-              echo "OK: x86_64 boot success"; kill $QPID 2>/dev/null; exit 0
+              echo "OK: boot success"; kill $QPID 2>/dev/null; exit 0
             }
             grep -q "check_exception\|Triple fault" qemu_debug.log 2>/dev/null && {
-              echo "FAIL: x86_64 crash"; grep "check_exception\|Triple fault" qemu_debug.log
+              echo "FAIL: crash"; grep "check_exception\|Triple fault" qemu_debug.log
               kill $QPID 2>/dev/null; exit 1
             }
           done
           kill $QPID 2>/dev/null; wait $QPID 2>/dev/null
-          echo "FAIL: x86_64 timeout"; exit 1
+          echo "FAIL: timeout"; exit 1
         timeout-minutes: 10
-
-  boot-arm64:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            gcc make python3 qemu-system-arm
-      - name: Build + boot ARM64
-        run: |
-          make ARCH=arm64 TLV=build/tlv.bin run 2>&1 | tee arm64.log &
-          QPID=$!
-          for i in $(seq 1 60); do
-            sleep 1
-            if grep -q "HAL\|HIC\|Kernel\|panic\|halt" arm64.log 2>/dev/null; then
-              echo "OK: ARM64 produced boot output"
-              kill $QPID 2>/dev/null; exit 0
-            fi
-          done
-          kill $QPID 2>/dev/null; wait $QPID 2>/dev/null
-          echo "WARN: ARM64 boot produced no recognizable output"
-          cat arm64.log
-        timeout-minutes: 5

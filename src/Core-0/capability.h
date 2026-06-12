@@ -217,7 +217,7 @@ void capability_system_init(void);
 void cap_init_domain_key(domain_id_t domain);
 
 /* 创建能力 */
-hic_status_t cap_create_memory(domain_id_t owner, phys_addr_t base, 
+hic_status_t cap_create_memory(domain_id_t owner, phys_addr_t base,
                                size_t size, cap_rights_t rights, cap_id_t *out);
 /* 创建执行流能力（EFC） */
 hic_status_t cap_create_thread(domain_id_t owner, thread_id_t thread_id, cap_id_t *out);

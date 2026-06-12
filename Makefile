@@ -6,10 +6,5 @@ O = build
 
 export ROOT_DIR = $(CURDIR)
 
-ifeq ($(ARCH),x86_64)
-include Makefile.x86_64
-else ifeq ($(ARCH),arm64)
-include Makefile.arm64
-else ifeq ($(ARCH),stm32f103)
-include Makefile.stm32f103
-endif
+# 按命名约定自动加载架构 Makefile（Makefile.x86_64, Makefile.arm64, ...）
+-include Makefile.$(ARCH)

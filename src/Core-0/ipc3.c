@@ -369,6 +369,31 @@ virt_addr_t ipc3_get_entry_va(ipc3_service_id_t service_id)
     return svc->entry_page_virt;
 }
 
+void ipc3_set_service_name(ipc3_service_id_t id, const char *name)
+{
+    if (id >= IPC3_MAX_SERVICES || !name) return;
+    ipc3_service_t *svc = &g_services[id];
+    if (!svc->active) return;
+    u32 i;
+    for (i = 0; i < sizeof(svc->name) - 1 && name[i]; i++)
+        svc->name[i] = name[i];
+    svc->name[i] = '\0';
+}
+
+virt_addr_t ipc3_find_service(const char *name)
+{
+    if (!name) return 0;
+    for (u32 i = 0; i < IPC3_MAX_SERVICES; i++) {
+        ipc3_service_t *svc = &g_services[i];
+        if (!svc->active || !svc->name[0]) continue;
+        u32 j;
+        for (j = 0; svc->name[j] && name[j] && svc->name[j] == name[j]; j++) {}
+        if (svc->name[j] == '\0' && name[j] == '\0')
+            return svc->entry_page_virt;
+    }
+    return 0;
+}
+
 /* ==================== Plan B — Page Fault Handler ==================== */
 
 /**

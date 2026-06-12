@@ -78,7 +78,14 @@ isr_14_handler:
     test %al, %al                /* IPC3 是否处理了此次缺页？ */
     jnz .ipc3_pf_handled
 
-    /* 非 IPC3 缺页 — 进入正常分发 */
+    /* 非 IPC3 缺页 — 尝试 MMIO 惰性映射 */
+    mov %cr2, %rdi               /* arg1: CR2 缺页地址 */
+    mov 128(%rsp), %rsi          /* arg2: error code */
+    call mmio_handle_pf
+    test %al, %al
+    jnz .ipc3_pf_restore         /* 已映射 → 重试指令 */
+
+    /* 非 MMIO 缺页 — 无法处理 */
     mov 120(%rsp), %rdi          /* arg1: 中断向量号 */
     call irq_dispatch
     jmp .ipc3_pf_restore

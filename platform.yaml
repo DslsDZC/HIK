@@ -89,6 +89,10 @@ static_modules:
     auto_start: true
     critical: true
     privileged: true
+    mmio_regions:
+      - base: 0xB8000
+        size: 0x8000               # 32KB VGA text mode framebuffer
+        perm: rw
 
   # 1. 固化验证服务（信任链起点）
   - name: verifier

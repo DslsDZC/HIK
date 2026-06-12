@@ -22,6 +22,8 @@
 
 #include "capability.h"
 #include "domain.h"
+#include "domain_switch.h"
+#include "pagetable.h"
 #include "pmm.h"
 #include "hal.h"
 #include "atomic.h"
@@ -140,6 +142,25 @@ hic_status_t cap_create_memory(domain_id_t owner, phys_addr_t base,
     g_global_cap_table[cap].flags = 0;
     g_global_cap_table[cap].memory.base = base;
     g_global_cap_table[cap].memory.size = size;
+
+    /* 如果是设备 MMIO 能力（CAP_MEM_DEVICE），同时映射页表 */
+    if (rights & CAP_MEM_DEVICE) {
+        page_table_t *pt = domain_switch_get_pagetable(owner);
+        if (pt) {
+            hic_status_t mst = pagetable_map(pt,
+                (virt_addr_t)base, base, size,
+                PERM_RW, MAP_TYPE_KERNEL);
+            if (mst == HIC_SUCCESS) {
+                console_puts("[CAP] Device memory mapped: domain=");
+                console_putu32(owner);
+                console_puts(" phys=0x");
+                console_puthex64(base);
+                console_puts(" size=0x");
+                console_puthex64(size);
+                console_puts("\n");
+            }
+        }
+    }
 
     *out = cap;
     return HIC_SUCCESS;

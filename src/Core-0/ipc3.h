@@ -65,8 +65,12 @@ typedef struct ipc3_service {
     virt_addr_t    service_stack;      /* service's stack pointer */
     domain_id_t    owner;              /* owning domain */
     bool           active;
+    char           name[64];           /* service name (for runtime lookup) */
     ipc3_bitmap_t  bitmap;             /* authorization bitmap */
 } ipc3_service_t;
+
+/* Lookup service by name, return entry page VA (0 = not found) */
+virt_addr_t ipc3_find_service(const char *name);
 
 /* ==================== Saved Caller Context ==================== */
 
@@ -90,6 +94,8 @@ hic_status_t ipc3_register_service(domain_id_t owner,
                                    virt_addr_t business_entry,
                                    virt_addr_t service_stack,
                                    ipc3_service_id_t *out_id);
+void ipc3_set_service_name(ipc3_service_id_t id, const char *name);
+virt_addr_t ipc3_find_service(const char *name);
 
 /* Set authorization: domain may call service */
 hic_status_t ipc3_authorize(ipc3_service_id_t service_id, domain_id_t domain);

@@ -10,6 +10,7 @@
  */
 
 #include "domain.h"
+#include "domain_switch.h"
 #include "capability.h"
 #include "pmm.h"
 #include "pagetable.h"
@@ -19,9 +20,12 @@
 #include "console.h"
 #include "atomic.h"
 #include "lib/mem.h"
+#include "lib/string.h"
 #include "hal.h"
 #include "pagetable.h"
 #include "ipc3.h"
+#include "yaml.h"
+#include "boot_info.h"
 #include "thread.h"  /* 用于域切换时的线程状态管理 */
 
 /* 外部引用：内核代码段地址范围 */
@@ -329,12 +333,25 @@ hic_status_t domain_create(domain_type_t type, domain_id_t parent,
             extern char __bss_start[], __bss_end[];
             size_t bss_size = (size_t)(__bss_end - __bss_start);
             if (bss_size > 0) {
-                pagetable_map(domain_pagetable,
+                hic_status_t bss_map_status = pagetable_map(domain_pagetable,
                     (virt_addr_t)__bss_start,
                     (phys_addr_t)__bss_start,
                     bss_size,
                     PERM_RW,
                     MAP_TYPE_KERNEL);
+                if (bss_map_status != HIC_SUCCESS) {
+                    console_puts("[Domain] FATAL: Failed to map kernel BSS (");
+                    console_puthex64((u64)__bss_start);
+                    console_puts(" size=");
+                    console_puthex64((u64)bss_size);
+                    console_puts(" status=");
+                    console_puthex64((u64)bss_map_status);
+                    console_puts(")\n");
+                    pagetable_destroy(domain_pagetable);
+                    pmm_free_frames(mem_base, (u32)((mem_size + PAGE_SIZE - 1) / PAGE_SIZE));
+                    cspace_destroy(domain_id);
+                    return HIC_ERROR_NO_MEMORY;
+                }
             }
 
             {
@@ -1528,10 +1545,185 @@ bool domain_can_create_sched_policy(domain_id_t domain_id, domain_sched_policy_t
 
 /**
  * 检查策略提升是否允许
- * 
+ *
  * 策略等级：EXCLUSIVE > QUOTA > SHARED > IDLE
  * 子能力的策略不能高于父能力
  */
+
+/* ==================== MMIO 配置表（从 platform.yaml 加载） ==================== */
+
+#define MAX_MMIO_ENTRIES 16
+
+static mmio_cfg_entry_t g_mmio_cfg[MAX_MMIO_ENTRIES];
+static u32 g_mmio_cfg_count = 0;
+
+/**
+ * mmio_load_config_from_yaml — 从 platform.yaml 解析 static_modules[].mmio_regions
+ * 由 boot 流程在模块加载前调用。
+ */
+void mmio_load_config_from_yaml(void)
+{
+    bool loaded = false;
+    yaml_parser_t *parser = NULL;
+
+    /* 1) 尝试从 platform.yaml 加载 */
+    if (g_boot_state.boot_info &&
+        g_boot_state.boot_info->platform.platform_data &&
+        g_boot_state.boot_info->platform.platform_size > 0) {
+
+        parser = yaml_parser_create(
+            (const char*)g_boot_state.boot_info->platform.platform_data,
+            g_boot_state.boot_info->platform.platform_size);
+        if (parser) loaded = (yaml_parse(parser) == 0);
+    }
+
+    if (loaded) {
+        /* YAML 解析成功 */
+
+    yaml_node_t *root = yaml_get_root(parser);
+    yaml_node_t *modules = yaml_find_node(root, "static_modules");
+    if (!modules || modules->type != YAML_TYPE_SEQUENCE) {
+        yaml_parser_destroy(parser);
+        return;
+    }
+
+    for (u32 mi = 0; ; mi++) {
+        yaml_node_t *mod = yaml_get_sequence_item(modules, mi);
+        if (!mod) break;
+
+        yaml_node_t *name_node = yaml_find_node(mod, "name");
+        yaml_node_t *mmio_seq = yaml_find_node(mod, "mmio_regions");
+        if (!name_node || !mmio_seq || mmio_seq->type != YAML_TYPE_SEQUENCE)
+            continue;
+
+        for (u32 ri = 0; ; ri++) {
+            yaml_node_t *reg = yaml_get_sequence_item(mmio_seq, ri);
+            if (!reg) break;
+            if (g_mmio_cfg_count >= MAX_MMIO_ENTRIES) break;
+
+            yaml_node_t *base_n = yaml_find_node(reg, "base");
+            yaml_node_t *size_n = yaml_find_node(reg, "size");
+            if (!base_n || !size_n) continue;
+
+            mmio_cfg_entry_t *e = &g_mmio_cfg[g_mmio_cfg_count++];
+            /* 复制服务名 */
+            const char *sv = yaml_get_scalar_value(name_node);
+            u32 si;
+            for (si = 0; si < sizeof(e->name)-1 && sv[si]; si++)
+                e->name[si] = sv[si];
+            e->name[si] = '\0';
+            e->base = yaml_get_u64(base_n, 0);
+            e->size = yaml_get_u64(size_n, 0);
+
+            console_puts("[MMIO] Config: ");
+            console_puts(e->name);
+            console_puts(" 0x");
+            console_puthex64(e->base);
+            console_puts(" size=0x");
+            console_puthex64(e->size);
+            console_puts("\n");
+        }
+    }
+
+    if (parser) yaml_parser_destroy(parser);
+    loaded = true;
+    console_puts("[MMIO] Loaded from platform.yaml\n");
+    }
+
+    /* 2) 如果 YAML 未加载成功，使用内建 fallback */
+    if (!loaded) {
+        static const struct {
+            const char *name;
+            phys_addr_t base;
+            size_t      size;
+        } builtin[] = {
+            { "vga_service", 0xB8000, 0x8000 },
+        };
+        console_puts("[MMIO] platform.yaml not available, using built-in\n");
+        for (u32 bi = 0; bi < sizeof(builtin)/sizeof(builtin[0]); bi++) {
+            if (g_mmio_cfg_count >= MAX_MMIO_ENTRIES) break;
+            mmio_cfg_entry_t *e = &g_mmio_cfg[g_mmio_cfg_count++];
+            u32 si;
+            for (si = 0; si < sizeof(e->name)-1 && builtin[bi].name[si]; si++)
+                e->name[si] = builtin[bi].name[si];
+            e->name[si] = '\0';
+            e->base = builtin[bi].base;
+            e->size = builtin[bi].size;
+            console_puts("[MMIO] Fallback: ");
+            console_puts(e->name);
+            console_puts(" 0x");
+            console_puthex64(e->base);
+            console_puts("\n");
+        }
+    }
+}
+
+/**
+ * mmio_config_for_service — 按服务名查找 MMIO 配置
+ * @return 非 NULL 表示找到首条匹配，base/size 有效
+ */
+const mmio_cfg_entry_t* mmio_config_for_service(const char *service_name)
+{
+    if (!service_name) return NULL;
+    for (u32 i = 0; i < g_mmio_cfg_count; i++) {
+        if (strcmp(g_mmio_cfg[i].name, service_name) == 0)
+            return &g_mmio_cfg[i];
+    }
+    return NULL;
+}
+
+/* ==================== #PF 惰性 MMIO 映射 ==================== */
+
+/**
+ * mmio_handle_pf — 缺页处理：检查是否为惰性 MMIO 映射
+ *
+ * 当域访问未映射的 MMIO 地址时触发 #PF。
+ * 如果地址落在 CAP_MEM_DEVICE 能力声明的范围内：
+ * 1. 获取域的页表
+ * 2. 映射缺页到页表
+ * 3. 返回 true（调用者重试指令）
+ *
+ * @param cr2      缺页地址（来自 CPU CR2 寄存器）
+ * @param err_code 缺页错误码
+ * @return true=已处理（重新执行），false=不由 MMIO 处理
+ */
+bool mmio_handle_pf(u64 cr2, u64 err_code)
+{
+    (void)err_code;  /* 保留给 RWX 权限检查 */
+    extern thread_t *g_current_thread;
+    if (!g_current_thread) return false;
+
+    domain_id_t dom = g_current_thread->domain_id;
+    page_table_t *pt = domain_switch_get_pagetable(dom);
+    if (!pt) return false;
+
+    /* 遍历能力表，查找匹配的 CAP_MEM_DEVICE 条目 */
+    for (u32 i = 0; i < CAP_TABLE_SIZE; i++) {
+        cap_entry_t *e = &g_global_cap_table[i];
+        if (!(e->rights & CAP_MEM_DEVICE)) continue;
+        if (e->owner != dom && e->owner != HIC_DOMAIN_CORE) continue;
+        phys_addr_t cap_base = e->memory.base;
+        size_t cap_size = e->memory.size;
+        if (cr2 < cap_base || cr2 >= cap_base + cap_size) continue;
+
+        /* 匹配！映射缺页 */
+        hic_status_t st = pagetable_map(pt,
+            (virt_addr_t)cr2 & ~0xFFFULL,
+            (phys_addr_t)cr2 & ~0xFFFULL,
+            PAGE_SIZE, PERM_RW, MAP_TYPE_KERNEL);
+        if (st == HIC_SUCCESS) {
+            console_puts("[MMIO] Demand page: domain=");
+            console_putu32(dom);
+            console_puts(" cr2=0x");
+            console_puthex64(cr2);
+            console_puts("\n");
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
 bool domain_check_policy_derivation(domain_sched_policy_t parent_policy,
                                     domain_sched_policy_t child_policy)
 {

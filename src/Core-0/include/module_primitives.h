@@ -232,5 +232,6 @@ void module_memcpy(void *dest, const void *src, size_t size);
  * @brief 内存设置
  */
 void module_memset(void *dest, int value, size_t size);
+uint64_t module_get_service_entry(const char *name);
 
 #endif /* HIC_MODULE_PRIMITIVES_H */

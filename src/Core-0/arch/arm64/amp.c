@@ -19,10 +19,16 @@ extern void _start(void);
 #define PSCI_CPU_ON       0xC4000003
 
 static u64 psci_call(u64 fn, u64 arg0, u64 arg1, u64 arg2) {
-    u64 r;
-    __asm__ volatile("hvc #0" : "=r"(r) : "r"(fn), "r"(arg0), "r"(arg1), "r"(arg2)
-                     : "x1", "x2", "x3", "x4", "x5", "x6", "x7", "memory");
-    return r;
+    /* PSCI calling convention: x0=fn, x1-3=args, x0=return */
+    register u64 r0 asm("x0") = fn;
+    register u64 r1 asm("x1") = arg0;
+    register u64 r2 asm("x2") = arg1;
+    register u64 r3 asm("x3") = arg2;
+    __asm__ volatile("hvc #0"
+                     : "+r"(r0)
+                     : "r"(r1), "r"(r2), "r"(r3)
+                     : "memory");
+    return r0;
 }
 
 hic_status_t arch_boot_aps(void) {

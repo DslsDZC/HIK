@@ -214,6 +214,5 @@ boot_state_t* get_boot_state(void);
 
 void timer_update(void);
 void kernel_maintenance_tasks(void);
-void pmm_mark_used(u64 base, u64 size);
 
 #endif /* BOOT_INFO_H */
