@@ -24,6 +24,7 @@ extern void context_switch(void *prev, void *next);
 
 /* Current running thread (NULL during early boot) */
 thread_t *g_current_thread = NULL;
+u32 g_last_scheduled = 0;
 
 /* ==================== Idle Thread ==================== */
 

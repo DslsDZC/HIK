@@ -191,9 +191,16 @@ virt_addr_t arch_thread_setup_stack(virt_addr_t stack_top,
                                     void *thread_exit_handler)
 {
     u64 *sp = (u64 *)(uintptr_t)stack_top;
-    sp--; *sp = (u64)thread_exit_handler;
-    sp--; *sp = (u64)entry_point;
-    sp -= 6;  /* rbx, rbp, r12-r15 */
+
+    /* ISR-frame-compatible initial stack:
+     * ISR 抢占的线程栈从低到高：15reg | vector | IRQ帧(RIP,CS,RFL)
+     * 初始栈模拟 ISR 帧，使 ISR 的 .L_fast_restore + iretq 可直接执行。 */
+    sp--; *sp = (u64)thread_exit_handler;  /* 入口函数 ret 到这里 */
+    sp--; *sp = 0x0202;                    /* IRQ帧: RFLAGS (IF=1) */
+    sp--; *sp = 0x0008;                    /* IRQ帧: CS (kernel CS) */
+    sp--; *sp = (u64)entry_point;          /* IRQ帧: RIP */
+    sp--; *sp = 0;                         /* IRQ 向量号 */
+    sp -= 15;                              /* 15 个 GP 寄存器槽位 */
     return (virt_addr_t)(uintptr_t)sp;
 }
 
@@ -458,20 +465,15 @@ hic_status_t thread_create(domain_id_t domain_id, virt_addr_t entry_point,
     thread->time_slice = 100;  /* 默认时间片 */
     thread->wait_flags = 0;
     
-    /* 初始化栈：设置入口点和退出处理 */
+    /* 初始化栈：ISR 帧兼容布局
+     * 从高到低：thread_exit_handler | RFLAGS(IF=1) | CS(0x08) | RIP(entry) | vector | 15regs */
     u64 *stack_top = (u64 *)(stack_phys + 4 * PAGE_SIZE);
-
-    /* 压入线程退出处理函数地址 */
-    stack_top--;
-    *stack_top = (u64)thread_exit_handler;
-
-    /* 压入入口点地址（作为首次调度的返回地址） */
-    stack_top--;
-    *stack_top = (u64)entry_point;
-
-    /* 为 callee-saved 寄存器预留空间 (rbx, rbp, r12-r15 = 6 个) */
-    stack_top -= 6;
-
+    stack_top--; *stack_top = (u64)thread_exit_handler;
+    stack_top--; *stack_top = 0x0202;                    /* RFLAGS */
+    stack_top--; *stack_top = 0x0008;                    /* CS */
+    stack_top--; *stack_top = (u64)entry_point;          /* RIP */
+    stack_top--; *stack_top = 0;                         /* IRQ向量号 */
+    stack_top -= 15;                                     /* 15 GP 寄存器槽位 */
     thread->stack_ptr = (virt_addr_t)stack_top;
 
     atomic_exit_critical(irq);

@@ -147,11 +147,20 @@ context_switch:
     testq %rdi, %rdi
     jz .L_first_switch
 
-    /* ===== 保存当前线程上下文到 prev ===== */
-
-    /* 保存调用者保存的寄存器 */
+    /* ===== 保存当前线程上下文到 prev =====
+     * 保存全部 15 个通用寄存器（与 ISR 帧布局一致），
+     * 使 ISR 的 .L_fast_restore + iretq 可直接恢复此上下文。 */
+    pushq %rax
     pushq %rbx
+    pushq %rcx
+    pushq %rdx
+    pushq %rsi
+    pushq %rdi
     pushq %rbp
+    pushq %r8
+    pushq %r9
+    pushq %r10
+    pushq %r11
     pushq %r12
     pushq %r13
     pushq %r14
@@ -159,19 +168,12 @@ context_switch:
 
     /* 保存栈指针到 prev->stack_ptr (偏移 40) */
     movq %rsp, 40(%rdi)
-    
+
     jmp .L_switch_to_new
 
 .L_first_switch:
-    /* 首次调度：prev 为 NULL，不需要保存上下文
-     * 但仍需保存返回地址，以便新线程完成后能返回到 schedule() 的调用者
-     * 注意：此时 RSP 指向调用 context_switch 的返回地址
-     */
-    
-    /* 保存 6 个 callee-saved 寄存器槽位（保持栈平衡）
-     * 这些值在恢复时会被丢弃，但需要保持栈布局一致
-     */
-    subq $48, %rsp    /* 6 * 8 = 48 字节，为 callee-saved 寄存器预留空间 */
+    /* 首次调度：prev 为 NULL，不需要保存上下文 */
+    subq $128, %rsp    /* 15 个寄存器槽位 + 1 个向量号槽位 (15+1)*8=128 */
 
 .L_switch_to_new:
     /* ===== 跨域线程切换 =====
@@ -213,10 +215,20 @@ context_switch:
     popq %r14
     popq %r13
     popq %r12
+    popq %r11
+    popq %r10
+    popq %r9
+    popq %r8
     popq %rbp
+    popq %rdi
+    popq %rsi
+    popq %rdx
+    popq %rcx
     popq %rbx
+    popq %rax
+    addq $8, %rsp       /* 跳过 IRQ 向量号 */
     sti
-    ret
+    iretq
 
 .size context_switch, .-context_switch
 
