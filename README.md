@@ -3,6 +3,21 @@
 > **Core rewrite project**: Core-0 will be rewritten in **Core-lang** (short: **Core**), a systems language under active development.
 > Core-lang repository: [github.com/dslsdzc/core](https://github.com/dslsdzc/core)
 
+## Performance
+
+IPC 3.0 entry-page self-check cross-domain call — **measured in userspace** on AMD A8-7650K @ 3.6 GHz:
+
+| Measurement | Latency |
+|---|---|
+| `bt [bitmap], ecx` (single authorization check) | **2.83 ± 0.38 cycles** (~0.8 ns) |
+| Full IPC3 rapid path round-trip (call → bt → jnc → jmp → ret) | **8.04 ± 0.98 cycles** (~2.2 ns) |
+| Overhead vs plain indirect call (bt + jnc + jmp) | **~4.3 cycles** |
+
+Results validated with Duff's device K-batch (K=1..128), weighted OLS fit (R²=1.0), MAD outlier filter. Run yourself: see `tests/benchmarks/`.
+
+- IPC3 design doc prediction: **6-9 cycles** — matched ✓
+- seL4 IPC: ~200-500 ns, Linux syscall: ~50-100 ns
+
 HIC (Hierarchical Isolation Core) is a multi-architecture microkernel with a
 three-tier privilege architecture and IPC 3.0 (entry-page self-check cross-domain
 call).
