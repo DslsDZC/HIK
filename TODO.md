@@ -29,6 +29,10 @@
 
 ## High priority
 
+- [ ] **Core rewrite** — Rewrite Core-0 in **Core-lang** ([github.com/dslsdzc/core](https://github.com/dslsdzc/core)).
+      Repo path: `~/core`. Start with pmm → capability → ipc3, QEMU-verify each step.
+      IPC3 perf baseline: bt ~2.83 cyc, full rapid path ~8 cyc (must not regress).
+
 - [ ] **MMIO config from platform.yaml** — MMIO mapping currently driven by a built-in
       table in static_module.c (mirroring platform.yaml mmio_regions). Should parse
       directly from platform.yaml so no kernel code change is needed for new devices.

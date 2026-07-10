@@ -1,5 +1,8 @@
 # HIC Kernel
 
+> **Core rewrite project**: Core-0 will be rewritten in **Core-lang** (short: **Core**), a systems language under active development.
+> Core-lang repository: [github.com/dslsdzc/core](https://github.com/dslsdzc/core)
+
 HIC (Hierarchical Isolation Core) is a multi-architecture microkernel with a
 three-tier privilege architecture and IPC 3.0 (entry-page self-check cross-domain
 call).
