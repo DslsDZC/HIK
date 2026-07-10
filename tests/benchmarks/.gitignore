@@ -1,0 +1,4 @@
+# Ignore compiled binaries
+ipc3_bitmap_bench
+ipc3_bt_bench
+ipc3_full_bench
