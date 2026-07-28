@@ -14,7 +14,7 @@ HIC系统将API接口分为两类，各有不同的维护原则：
 
 ### 官方接口（Official API）
 
-**定义**: 由HIC官方团队维护和发布的接口。
+**定义**: 由HIC项目维护的接口。
 
 **范围**:
 - 所有系统调用（0-255）
@@ -23,11 +23,11 @@ HIC系统将API接口分为两类，各有不同的维护原则：
 - 官方扩展服务（文件系统、网络栈、块设备等）
 
 **维护原则**:
-- ✅ **只向后兼容**: 新版本永远兼容旧版本
-- ✅ **不减少功能**: 永不删除或废弃现有接口
-- ✅ **只增加功能**: 新版本只能添加新接口，不能修改或删除现有接口
-- ✅ **稳定保证**: API签名、参数、返回值在ABI版本内永不改变
-- ✅ **文档完整**: 每个接口都有完整的文档和示例
+- **只向后兼容**: 新版本永远兼容旧版本
+- **不减少功能**: 不删除或废弃现有接口
+- **只增加功能**: 新版本只能添加新接口，不能修改或删除现有接口
+- **稳定保证**: API签名、参数、返回值在ABI版本内不改变
+- **文档完整**: 每个接口都有完整的文档和示例
 
 **对开发者的意义**:
 - 代码可以长期使用，无需担心API变更
@@ -414,21 +414,21 @@ typedef enum {
 ### 1. 错误处理
 
 ```c
-/* ✅ 好的做法 */
+/* 好的做法 */
 hic_error_t err = hic_domain_create(&config, &domain);
 if (!hic_is_ok(err)) {
     printf("Error: %s\n", hic_strerror(err));
     return err;
 }
 
-/* ❌ 不好的做法 */
+/* 不好的做法 */
 hic_domain_create(&config, &domain);  /* 忽略错误 */
 ```
 
 ### 2. 资源清理
 
 ```c
-/* ✅ 使用RAII风格（C++） */
+/* 使用RAII风格（C++） */
 {
     auto domain = hic::Domain::create(&config);
     if (!domain) return;
@@ -436,7 +436,7 @@ hic_domain_create(&config, &domain);  /* 忽略错误 */
     /* 使用域 */
 }  /* 自动清理 */
 
-/* ✅ 手动清理（C） */
+/* 手动清理（C） */
 hic_domain_t domain;
 hic_error_t err = hic_domain_create(&config, &domain);
 if (!hic_is_ok(err)) return err;
@@ -449,7 +449,7 @@ hic_domain_destroy(domain);  /* 清理 */
 ### 3. 版本检查
 
 ```c
-/* ✅ 在程序启动时检查版本 */
+/* 在程序启动时检查版本 */
 u32 major, minor, patch;
 hic_api_get_version(&major, &minor, &patch);
 
@@ -478,19 +478,19 @@ printf("Avg syscall time: %llu ns\n",
 ### 1. 减少系统调用
 
 ```c
-/* ❌ 不好的做法 */
+/* 不好的做法 */
 for (int i = 0; i < 1000; i++) {
     hic_ipc_call(cap, &msg, sizeof(msg), NULL, NULL);  /* 1000次系统调用 */
 }
 
-/* ✅ 好的做法 */
+/* 好的做法 */
 /* 批量处理，减少系统调用次数 */
 ```
 
 ### 2. 使用共享内存
 
 ```c
-/* ✅ 大数据传输使用共享内存 */
+/* 大数据传输使用共享内存 */
 hic_shmem_t shmem;
 hic_shmem_alloc(1024 * 1024, 0, &shmem);  /* 1MB */
 void* addr;
@@ -506,7 +506,7 @@ hic_ipc_call(cap, &notification, sizeof(notification), NULL, NULL);
 ### 3. 缓存端点能力
 
 ```c
-/* ✅ 缓存能力句柄 */
+/* 缓存能力句柄 */
 static hic_cap_t cached_fs_cap = HIC_CAP_INVALID;
 
 if (cached_fs_cap == HIC_CAP_INVALID) {
@@ -569,10 +569,10 @@ if (cap == HIC_CAP_INVALID) {
 
 ### Q1: 官方接口的稳定性如何保证？
 
-**A**: HIC官方接口遵循严格的向后兼容原则：
+**A**: 官方接口遵循向后兼容原则：
 
-- **永不删除**任何公开API
-- **永不修改**任何公开API的签名
+- **不删除**任何公开API
+- **不修改**任何公开API的签名
 - **永远保持**二进制兼容性
 - **只添加**新功能，不影响现有功能
 
@@ -589,7 +589,7 @@ if (!hic_is_ok(err)) {
 }
 ```
 
-### Q2: 如何处理版本不兼容？
+### Q3: 如何处理版本不兼容？
 
 ```c
 if (!hic_api_check_compatibility(1, 0, avail_major, avail_minor)) {
@@ -602,20 +602,16 @@ if (!hic_api_check_compatibility(1, 0, avail_major, avail_minor)) {
 }
 ```
 
-### Q3: 如何确保线程安全？
+### Q4: 如何确保线程安全？
 
 HIC API设计为线程安全，每个域独立运行。但需要注意：
 
 ```c
-/* ✅ 每个域独立，无需锁 */
+/* 每个域独立，无需锁 */
 hic_thread_create(domain1, &config1, &thread1);
 hic_thread_create(domain2, &config2, &thread2);
 
-/* ⚠️ 同一域内多线程需要同步 */
-/* 使用共享内存或IPC进行通信 */
-```
-
-/* ⚠️ 同一域内多线程需要同步 */
+/* 同一域内多线程需要同步 */
 /* 使用共享内存或IPC进行通信 */
 ```
 
@@ -624,15 +620,15 @@ hic_thread_create(domain2, &config2, &thread2);
 ## 官方接口 vs 第三方接口
 
 **重要**: 关于接口分类和官方接口维护原则的详细信息，请参阅：
-- [接口分类与维护原则](./interface_classification.md)
+- [接口分类与维护原则](./接口规范.md)
 
 ### 对比表
 
 | 特性 | 官方接口 | 第三方接口 |
 |------|---------|-----------|
-| **维护方** | HIC官方团队 | 各自开发者 |
+| **维护方** | 项目维护者 | 各自开发者 |
 | **兼容性** | 向后兼容 | 不保证 |
-| **稳定性** | 高（永不删除） | 中等 |
+| **稳定性** | 高（不删除） | 中等 |
 | **文档** | 完整 | 各自提供 |
 | **支持** | 官方支持 | 社区支持 |
 | **端点范围** | 0x0000-0x8FFF | 0x9000-0xAFFF |
@@ -702,10 +698,9 @@ hic_endpoint_register("my_service", 0x7500, handler);
 
 ## 参考文档
 
-- [API接口列表](./api_interface_list.md)
-- [能力系统](../Wiki/11-CapabilitySystem.md)
+- [API接口列表](./API列表.md)
 - [三层模型](./三层模型.md)
-- [性能指标](./README.md#性能指标)
+- [性能指标](./三层模型.md#性能指标)
 
 ---
 

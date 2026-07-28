@@ -8,8 +8,6 @@ SPDX-License-Identifier: CC-BY-4.0
 
 本文档详细说明了HIC系统的CHAL (Compatibility Hardware Abstraction Layer) 兼容性硬件抽象层。
 
----
-
 ## 一、CHAL概述
 
 ### 1.1 什么是CHAL？
@@ -35,11 +33,11 @@ CHAL (Compatibility Hardware Abstraction Layer) 是HIC系统的兼容性硬件�
 
 ### 1.3 CHAL的优势
 
-✅ **更简单**：减少参数，减少错误
-✅ **更直观**：命名清晰，易于理解
-✅ **更方便**：提供便捷封装，减少样板代码
-✅ **更安全**：内置错误检查和验证
-✅ **更兼容**：保证API/ABI的向后兼容性
+**更简单**：减少参数，减少错误
+**更直观**：命名清晰，易于理解
+**更方便**：提供便捷封装，减少样板代码
+**更安全**：内置错误检查和验证
+**更兼容**：保证API/ABI的向后兼容性
 
 ---
 
@@ -106,8 +104,8 @@ u64 page_addr = chal_page_address(page_num);
 **定义**：保证API/ABI的向后兼容性
 
 **实施**：
-- 永不删除公开接口
-- 永不修改接口签名
+- 不删除公开接口
+- 不修改接口签名
 - 只添加新功能，不修改现有功能
 - 提供版本兼容性检查
 
@@ -600,25 +598,18 @@ CHAL_UNREACHABLE();
 
 ### 8.1 使用建议
 
-✅ **优先使用CHAL**：应用和服务代码优先使用CHAL，而非直接使用HAL
-
-✅ **使用RAII风格**：使用`CHAL_IRQ_SCOPE()`等宏自动管理资源
-
-✅ **检查错误**：使用`chal_ok()`和`chal_fail()`检查错误
-
-✅ **版本检查**：使用版本兼容性检查确保API兼容
-
-✅ **使用便捷函数**：使用`chal_wait_for_bit_set()`等便捷函数
+- **优先使用CHAL**：应用和服务代码优先使用CHAL，而非直接使用HAL
+- **使用RAII风格**：使用`CHAL_IRQ_SCOPE()`等宏自动管理资源
+- **检查错误**：使用`chal_ok()`和`chal_fail()`检查错误
+- **版本检查**：使用版本兼容性检查确保API兼容
+- **使用便捷函数**：使用`chal_wait_for_bit_set()`等便捷函数
 
 ### 8.2 避免的做法
 
-❌ **不要混合使用**：不要同时使用CHAL和HAL
-
-❌ **不要忽略错误**：不要忽略错误检查
-
-❌ **不要硬编码值**：使用`CHAL_PAGE_SIZE`等常量
-
-❌ **不要假设兼容性**：使用版本检查确保兼容
+- **不要混合使用**：不要同时使用CHAL和HAL
+- **不要忽略错误**：不要忽略错误检查
+- **不要硬编码值**：使用`CHAL_PAGE_SIZE`等常量
+- **不要假设兼容性**：使用版本检查确保兼容
 
 ### 8.3 性能考虑
 
@@ -665,10 +656,9 @@ CHAL_IRQ_SCOPE_END();
 
 ## 十、参考文档
 
-- [HAL硬件抽象层](../Wiki/10-HardwareAbstractionLayer.md)
-- [API接口列表](./api_interface_list.md)
-- [接口分类与维护原则](./interface_classification.md)
-- [API开发者指南](./api_developer_guide.md)
+- [API接口列表](./API列表.md)
+- [接口分类与维护原则](./接口规范.md)
+- [API开发者指南](./API开发.md)
 
 ---
 
